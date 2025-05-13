@@ -37,59 +37,23 @@
 #include <fstream>
 #include <iostream>
 
+#include "include/problemOperators/monodomain.hpp"
+
 using namespace std;
 using namespace mfem;
 
-/** After spatial discretization, the conduction model can be written as:
- *
- *     du/dt = M^{-1}(-Ku)
- *
- *  where u is the vector representing the temperature, M is the mass matrix,
- *  and K is the diffusion operator with diffusivity depending on u:
- *  (\kappa + \alpha u).
- *
- *  Class ConductionOperator represents the right-hand side of the above ODE.
- */
-class ConductionOperator : public TimeDependentOperator
+
+real_t InitialTemperature(const Vector &x)
 {
-protected:
-   ParFiniteElementSpace &fespace;
-   Array<int> ess_tdof_list; // this list remains empty for pure Neumann b.c.
-
-   ParBilinearForm *M;
-   ParBilinearForm *K;
-
-   HypreParMatrix Mmat;
-   HypreParMatrix Kmat;
-   HypreParMatrix *T; // T = M + dt K
-   real_t current_dt;
-
-   CGSolver M_solver;    // Krylov solver for inverting the mass matrix M
-   HypreSmoother M_prec; // Preconditioner for the mass matrix M
-
-   CGSolver T_solver;    // Implicit solver for T = M + dt K
-   HypreSmoother T_prec; // Preconditioner for the implicit solver
-
-   real_t alpha, kappa;
-
-   mutable Vector z; // auxiliary vector
-
-public:
-   ConductionOperator(ParFiniteElementSpace &f, real_t alpha, real_t kappa,
-                      const Vector &u);
-
-   virtual void Mult(const Vector &u, Vector &du_dt) const;
-   /** Solve the Backward-Euler equation: k = f(u + dt*k, t), for the unknown k.
-       This is the only requirement for high-order SDIRK implicit integration.*/
-   virtual void ImplicitSolve(const real_t dt, const Vector &u, Vector &k);
-
-   /// Update the diffusion BilinearForm K using the given true-dof vector `u`.
-   void SetParameters(const Vector &u);
-
-   virtual ~ConductionOperator();
-};
-
-real_t InitialTemperature(const Vector &x);
+   if (x.Norml2() < 0.5)
+   {
+      return 2.0;
+   }
+   else
+   {
+      return 1.0;
+   }
+}
 
 int main(int argc, char *argv[])
 {
@@ -100,7 +64,7 @@ int main(int argc, char *argv[])
    Hypre::Init();
 
    // 2. Parse command-line options.
-   const char *mesh_file = "../data/star.mesh";
+   const char *mesh_file = "mesh/star.mesh";
    int ser_ref_levels = 2;
    int par_ref_levels = 1;
    int order = 2;
@@ -369,7 +333,7 @@ int main(int argc, char *argv[])
    //     using GLVis: "glvis -np <np> -m ex16-mesh -g ex16-final".
    {
       ostringstream sol_name;
-      sol_name << "ex16-final." << setfill('0') << setw(6) << myid;
+      sol_name << "MonoDomain" << setfill('0') << setw(6) << myid;
       ofstream osol(sol_name.str().c_str());
       osol.precision(precision);
       u_gf.Save(osol);
@@ -380,107 +344,4 @@ int main(int argc, char *argv[])
    delete pmesh;
 
    return 0;
-}
-
-ConductionOperator::ConductionOperator(ParFiniteElementSpace &f, real_t al,
-                                       real_t kap, const Vector &u)
-   : TimeDependentOperator(f.GetTrueVSize(), (real_t) 0.0), fespace(f),
-     M(NULL), K(NULL), T(NULL), current_dt(0.0),
-     M_solver(f.GetComm()), T_solver(f.GetComm()), z(height)
-{
-   const real_t rel_tol = 1e-8;
-
-   M = new ParBilinearForm(&fespace);
-   M->AddDomainIntegrator(new MassIntegrator());
-   M->Assemble(0); // keep sparsity pattern of M and K the same
-   M->FormSystemMatrix(ess_tdof_list, Mmat);
-
-   M_solver.iterative_mode = false;
-   M_solver.SetRelTol(rel_tol);
-   M_solver.SetAbsTol(0.0);
-   M_solver.SetMaxIter(100);
-   M_solver.SetPrintLevel(0);
-   M_prec.SetType(HypreSmoother::Jacobi);
-   M_solver.SetPreconditioner(M_prec);
-   M_solver.SetOperator(Mmat);
-
-   alpha = al;
-   kappa = kap;
-
-   T_solver.iterative_mode = false;
-   T_solver.SetRelTol(rel_tol);
-   T_solver.SetAbsTol(0.0);
-   T_solver.SetMaxIter(100);
-   T_solver.SetPrintLevel(0);
-   T_solver.SetPreconditioner(T_prec);
-
-   SetParameters(u);
-}
-
-void ConductionOperator::Mult(const Vector &u, Vector &du_dt) const
-{
-   // Compute:
-   //    du_dt = M^{-1}*-Ku
-   // for du_dt, where K is linearized by using u from the previous timestep
-   Kmat.Mult(u, z);
-   z.Neg(); // z = -z
-   M_solver.Mult(z, du_dt);
-}
-
-void ConductionOperator::ImplicitSolve(const real_t dt,
-                                       const Vector &u, Vector &du_dt)
-{
-   // Solve the equation:
-   //    du_dt = M^{-1}*[-K(u + dt*du_dt)]
-   // for du_dt, where K is linearized by using u from the previous timestep
-   if (!T)
-   {
-      T = Add(1.0, Mmat, dt, Kmat);
-      current_dt = dt;
-      T_solver.SetOperator(*T);
-   }
-   MFEM_VERIFY(dt == current_dt, ""); // SDIRK methods use the same dt
-   Kmat.Mult(u, z);
-   z.Neg();
-   T_solver.Mult(z, du_dt);
-}
-
-void ConductionOperator::SetParameters(const Vector &u)
-{
-   ParGridFunction u_alpha_gf(&fespace);
-   u_alpha_gf.SetFromTrueDofs(u);
-   for (int i = 0; i < u_alpha_gf.Size(); i++)
-   {
-      u_alpha_gf(i) = kappa + alpha*u_alpha_gf(i);
-   }
-
-   delete K;
-   K = new ParBilinearForm(&fespace);
-
-   GridFunctionCoefficient u_coeff(&u_alpha_gf);
-
-   K->AddDomainIntegrator(new DiffusionIntegrator(u_coeff));
-   K->Assemble(0); // keep sparsity pattern of M and K the same
-   K->FormSystemMatrix(ess_tdof_list, Kmat);
-   delete T;
-   T = NULL; // re-compute T on the next ImplicitSolve
-}
-
-ConductionOperator::~ConductionOperator()
-{
-   delete T;
-   delete M;
-   delete K;
-}
-
-real_t InitialTemperature(const Vector &x)
-{
-   if (x.Norml2() < 0.5)
-   {
-      return 2.0;
-   }
-   else
-   {
-      return 1.0;
-   }
 }
