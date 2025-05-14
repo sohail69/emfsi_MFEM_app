@@ -17,7 +17,8 @@ protected:
    int height, width;
    real_t time;
    bool symmetric;  // deprecated
-   Array<GridFunction&> & GFuncs; //Fibre and diffusion GFuncs
+   Array<GridFunction*> & fibreBasis; //Fibre GFuncs
+   GridFunction         & diff;       //Diffusion GFun
 
 public:
    /// Construct a dim x dim matrix coefficient.
@@ -64,6 +65,15 @@ public:
 !
 \*****************************************/
 void Eval(DenseMatrix &K, ElementTransformation &T,const IntegrationPoint &ip){
+/*
+  for(int I=0; I<fibreBasis.Size(); I++){
+    Vector f_i;
+    fibreBasis[I]->;
+    for(int J=0; J<; J++){
+      for(int K=0; K<; K++){
 
+      }
+    }
+  }*/
 };
 

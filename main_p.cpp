@@ -204,7 +204,7 @@ int main(int argc, char *argv[])
    BC_Vals[0] =  5.00;
    ess_bcs_markers[0] = 1;
 
-   BC_Vals[1] = -5.00;
+   BC_Vals[1] = 0.00;
    ess_bcs_markers[1] = 1;
 
    monodomainOper mnOper(fespace, alpha, kappa, u);
@@ -230,6 +230,7 @@ int main(int argc, char *argv[])
    ode_solver->Init(mnOper);
    real_t t = 0.0;
 
+   //Time-stepping loop
    bool last_step = false;
    for (int ti = 1; !last_step; ti++)
    {

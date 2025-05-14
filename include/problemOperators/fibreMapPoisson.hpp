@@ -5,16 +5,15 @@
 using namespace std;
 using namespace mfem;
 
-int func(double phi_i){
-  return ()
-  /*
-    IF( ABS(phi_pp(i)) <= 0.6)                             CI = 5;
-    IF((ABS(phi_pp(i)) <= 0.9).AND.(ABS(phi_pp(i)) > 0.6)) CI = 4;
-    IF( ABS(phi_pp(i)) >  0.9)                             CI = 3;
-
-    IF(ABS(phi_pp(i)) <= (0.25)) SD = 1;
-    IF(ABS(phi_pp(i)) >  (0.25)) SD = 0;*/
+int stimulus_mask(double phi){
+  return ((phi <= 0.25) ? 1 : 0);
 }
+
+
+int CellType_mask(double phi){
+  return ((phi <= 0.6) ? 5 : ((phi <= 0.9) ? 4 : 3));
+}
+
 
 /*****************************************\
 !
@@ -155,7 +154,7 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 !
 ! Destroys the fibre map operator
 !
-/*****************************************/
+\*****************************************/
 fibreMapPoissonOper::~fibreMapPoissonOper(){
   delete _K, _K_uncon, invM;
   delete z;
@@ -167,5 +166,11 @@ fibreMapPoissonOper::~fibreMapPoissonOper(){
 ! Constructs the actual fibre maps and puts
 ! them into a gridfunction
 !
-/*****************************************/
-void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction> FibreFields){};
+\*****************************************/
+void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> FibreFields){
+   MFEM_VERIFY(FibreFields.Size() == FibreFields[0]->GetVDim(), "The GFunc array size isn't ndim fibrePoisson");
+   *z = x;
+   for(int I=0; I<FibreFields.Size(); I++){
+     z->GetGradient(ElementTransformation &tr, Vector &grad) const;
+   }
+};

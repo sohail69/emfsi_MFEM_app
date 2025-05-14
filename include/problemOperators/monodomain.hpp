@@ -22,6 +22,7 @@ protected:
    Array<int> empty_tdofs;
    ParFiniteElementSpace &fespace;
 
+   MatrixCoefficient *diffCoef;
    ParBilinearForm *M;
    ParBilinearForm *K;
 
