@@ -54,12 +54,14 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
                                        Operator(f.GetTrueVSize()), _ess_bcs_markers(ess_bcs_markers)
                                        , _BC_Vals(BC_Vals), _fespace(f)
 {
+   MFEM_VERIFY(BC_Vals.Size() == ess_bcs_markers.Size(), "The BC arrays should be same size fibrePoisson");
+
   //Construct the matrix Operators
   Array<int> ess_bcs_tdofs;
   _K = new ParBilinearForm(&_fespace);
   _K->AddDomainIntegrator(new DiffusionIntegrator);
   _K->Assemble();
-  _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
+  if(_ess_bcs_markers.Size() != 0) _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
   _K->FormSystemMatrix(ess_bcs_tdofs, _Kmat);
 
   //Construct the solver
@@ -88,13 +90,15 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
   z->Distribute(&x);
 
   //Apply the BC's
-  Array<int> ess_bcs_tmp(_BC_Vals.Size());
-  for(int I=0; I<_BC_Vals.Size(); I++){
-    if(_ess_bcs_markers[I] != 0){
-      ess_bcs_tmp = 0;
-      ess_bcs_tmp[I] = 1;
-      ConstantCoefficient BDR_coeff(_BC_Vals[I]);
-      z->ProjectBdrCoefficient(BDR_coeff, ess_bcs_tmp);
+  if(_BC_Vals.Size() != 0){
+    Array<int> ess_bcs_tmp(_BC_Vals.Size());
+    for(int I=0; I<_BC_Vals.Size(); I++){
+      if(_ess_bcs_markers[I] != 0){
+        ess_bcs_tmp = 0;
+        ess_bcs_tmp[I] = 1;
+        ConstantCoefficient BDR_coeff(_BC_Vals[I]);
+        z->ProjectBdrCoefficient(BDR_coeff, ess_bcs_tmp);
+      }
     }
   }
 

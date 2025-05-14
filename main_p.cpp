@@ -185,25 +185,27 @@ int main(int argc, char *argv[])
       cout << "Number of temperature unknowns: " << fe_size << endl;
    }
 
-   ParGridFunction u_gf(&fespace);
+   ParGridFunction u_gf(&fespace), f_gf(&fespace);
 
    // 8. Set the initial conditions for u. All boundaries are considered
    //    natural.
    FunctionCoefficient u_0(InitialTemperature);
    u_gf.ProjectCoefficient(u_0);
-   Vector u;
+   Vector u, phi;
    u_gf.GetTrueDofs(u);
+   u_gf.GetTrueDofs(phi);
 
    // 9. Initialize the conduction operator and the VisIt visualization.
-   Array<int>     ess_bcs_markers;
-   Array<double>  BC_Vals;
+   Array<int>     ess_bcs_markers(1);
+   Array<double>  BC_Vals(1);
+   BC_Vals = ;
+   ess_bcs_markers = 1;
 
-   monodomainOper oper(fespace, alpha, kappa, u);
+   monodomainOper mnOper(fespace, alpha, kappa, u);
    fibreMapPoissonOper fpOper(fespace, ess_bcs_markers, BC_Vals);
    u_gf.SetFromTrueDofs(u);
-
-
-
+   u_gf.SetFromTrueDofs(phi);
+   f_gf = u_gf;
 
 
    ParaViewDataCollection paraview_dc("monoDomain", pmesh);
@@ -214,11 +216,12 @@ int main(int argc, char *argv[])
    paraview_dc.SetCycle(0);
    paraview_dc.SetTime(0.0);
    paraview_dc.RegisterField("Potential",&u_gf);
+   paraview_dc.RegisterField("Phi",&f_gf);
    paraview_dc.Save();
 
    // 10. Perform time-integration (looping over the time iterations, ti, with a
    //     time-step dt).
-   ode_solver->Init(oper);
+   ode_solver->Init(mnOper);
    real_t t = 0.0;
 
    bool last_step = false;
@@ -226,16 +229,18 @@ int main(int argc, char *argv[])
    {
       if (t + dt >= t_final - dt/2) last_step = true;
       ode_solver->Step(u, t, dt);
+      fpOper.Mult(f_gf,phi);
 
       if (last_step || (ti % vis_steps) == 0)
       {
          if (myid == 0) cout << "step " << ti << ", t = " << t << endl;
          u_gf.SetFromTrueDofs(u);
+         f_gf.SetFromTrueDofs(phi);
          paraview_dc.SetCycle(ti);
          paraview_dc.SetTime(t);
          paraview_dc.Save();
       }
-      oper.SetParameters(u);
+      mnOper.SetParameters(u);
    }
 
    // 12. Free the used memory.
