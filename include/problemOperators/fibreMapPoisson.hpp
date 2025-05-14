@@ -5,6 +5,17 @@
 using namespace std;
 using namespace mfem;
 
+int func(double phi_i){
+  return ()
+  /*
+    IF( ABS(phi_pp(i)) <= 0.6)                             CI = 5;
+    IF((ABS(phi_pp(i)) <= 0.9).AND.(ABS(phi_pp(i)) > 0.6)) CI = 4;
+    IF( ABS(phi_pp(i)) >  0.9)                             CI = 3;
+
+    IF(ABS(phi_pp(i)) <= (0.25)) SD = 1;
+    IF(ABS(phi_pp(i)) >  (0.25)) SD = 0;*/
+}
+
 /*****************************************\
 !
 ! Solves the poisson equation and generates
@@ -19,11 +30,16 @@ protected:
    Array<int>    & _ess_bcs_markers;
    Array<double> & _BC_Vals;
    ParFiniteElementSpace & _fespace;
-   ParBilinearForm *_K;
-   HypreParMatrix _Kmat;
+   ParMixedBilinearForm *_K;
+   ParBilinearForm *_K_uncon;
+   HypreParMatrix _Kmat, _Kmat_uncon;
 
    CGSolver _K_solver;    // Krylov solver for inverting the mass matrix K
    HypreSmoother _K_prec; // Preconditioner for the diffusion matrix K
+
+   //The Preconditioning objects
+   HypreBoomerAMG *invM=NULL;
+
 
    mutable ParGridFunction *z; // auxiliary GFunc used for BC's
 
@@ -57,13 +73,29 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
    MFEM_VERIFY(BC_Vals.Size() == ess_bcs_markers.Size(), "The BC arrays should be same size fibrePoisson");
 
   //Construct the matrix Operators
-  Array<int> ess_bcs_tdofs;
+  Array<int> ess_bcs_tdofs, empty_tdofs;
   if(_ess_bcs_markers.Size() != 0) _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
-  ConstantCoefficient one(1.00);
-  _K = new ParBilinearForm(&_fespace);
+  ConstantCoefficient one(1.0);
+
+  //Constrained
+  _K = new ParMixedBilinearForm(&_fespace,&_fespace);
   _K->AddDomainIntegrator(new DiffusionIntegrator(one));
   _K->Assemble();
-  _K->FormSystemMatrix(ess_bcs_tdofs, _Kmat);
+  _K->FormRectangularSystemMatrix(empty_tdofs, ess_bcs_tdofs, _Kmat);
+
+  //Unconstrained
+  _K_uncon = new ParBilinearForm(&_fespace);
+  _K_uncon->AddDomainIntegrator(new DiffusionIntegrator(one));
+  _K_uncon->Assemble();
+  _K_uncon->FormSystemMatrix(empty_tdofs, _Kmat_uncon);
+
+  //Build the preconditioner
+  invM = new HypreBoomerAMG(_Kmat_uncon);
+  invM->SetInterpolation(6);
+  invM->SetCoarsening(8);
+  invM->SetRelaxType(6);
+  invM->SetCycleNumSweeps(2,2);
+  invM->SetCycleType(2);
 
   //Construct the solver
   const real_t rel_tol = 1e-8;
@@ -72,8 +104,7 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
   _K_solver.SetAbsTol(0.0);
   _K_solver.SetMaxIter(500);
   _K_solver.SetPrintLevel(0);
-  _K_prec.SetType(HypreSmoother::Jacobi);
-  _K_solver.SetPreconditioner(_K_prec);
+  _K_solver.SetPreconditioner(*invM);
   _K_solver.SetOperator(_Kmat);
 
   //Construct the temporary gridFunction
@@ -87,10 +118,8 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
 /*****************************************/
 void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 {
-  //Set the tmp Gridfunction before BCs
-  z->Distribute(&x);
-
   //Apply the BC's
+  (*z)=0.00;
   if(_BC_Vals.Size() != 0){
     Array<int> ess_bcs_tmp(_BC_Vals.Size()), ess_tdofs;
     for(int I=0; I<_BC_Vals.Size(); I++){
@@ -98,13 +127,28 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
         ess_bcs_tmp = 0;
         ess_bcs_tmp[I] = 1;
         _fespace.GetEssentialTrueDofs(ess_bcs_tmp, ess_tdofs);
-        z->SetSubVector(ess_tdofs,_BC_Vals[I]);
+        z->SetSubVector(ess_tdofs,-_BC_Vals[I]);
       }
     }
   }
+  y = *z;
+  _Kmat.Mult( y, *z);
 
   //Solve the problem
   _K_solver.Mult(*z,y);
+
+  //Repair the boundary issue (Hack)
+  if(_BC_Vals.Size() != 0){
+    Array<int> ess_bcs_tmp(_BC_Vals.Size()), ess_tdofs;
+    for(int I=0; I<_BC_Vals.Size(); I++){
+      if(_ess_bcs_markers[I] != 0){
+        ess_bcs_tmp = 0;
+        ess_bcs_tmp[I] = 1;
+        _fespace.GetEssentialTrueDofs(ess_bcs_tmp, ess_tdofs);
+        y.SetSubVector(ess_tdofs,_BC_Vals[I]);
+      }
+    }
+  }
 };
 
 /*****************************************\
@@ -113,7 +157,7 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 !
 /*****************************************/
 fibreMapPoissonOper::~fibreMapPoissonOper(){
-  delete _K;
+  delete _K, _K_uncon, invM;
   delete z;
 };
 
