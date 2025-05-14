@@ -38,11 +38,12 @@
 #include <iostream>
 
 #include "include/problemOperators/monodomain.hpp"
+#include "include/Visualisation.hpp"
 
 using namespace std;
 using namespace mfem;
 
-
+real_t InitialTemperature(const Vector &x);
 real_t InitialTemperature(const Vector &x)
 {
    if (x.Norml2() < 0.5)
@@ -53,7 +54,7 @@ real_t InitialTemperature(const Vector &x)
    {
       return 1.0;
    }
-}
+};
 
 int main(int argc, char *argv[])
 {
@@ -101,9 +102,7 @@ int main(int argc, char *argv[])
                   "Alpha coefficient.");
    args.AddOption(&kappa, "-k", "--kappa",
                   "Kappa coefficient offset.");
-   args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
-                  "--no-visualization",
-                  "Enable or disable GLVis visualization.");
+
    args.AddOption(&visit, "-visit", "--visit-datafiles", "-no-visit",
                   "--no-visit-datafiles",
                   "Save data files for VisIt (visit.llnl.gov) visualization.");
@@ -195,84 +194,19 @@ int main(int argc, char *argv[])
    u_gf.GetTrueDofs(u);
 
    // 9. Initialize the conduction operator and the VisIt visualization.
-   ConductionOperator oper(fespace, alpha, kappa, u);
-
+   monodomainOper oper(fespace, alpha, kappa, u);
    u_gf.SetFromTrueDofs(u);
-   {
-      ostringstream mesh_name, sol_name;
-      mesh_name << "ex16-mesh." << setfill('0') << setw(6) << myid;
-      sol_name << "ex16-init." << setfill('0') << setw(6) << myid;
-      ofstream omesh(mesh_name.str().c_str());
-      omesh.precision(precision);
-      pmesh->Print(omesh);
-      ofstream osol(sol_name.str().c_str());
-      osol.precision(precision);
-      u_gf.Save(osol);
-   }
 
-   VisItDataCollection visit_dc("Example16-Parallel", pmesh);
-   visit_dc.RegisterField("temperature", &u_gf);
-   if (visit)
-   {
-      visit_dc.SetCycle(0);
-      visit_dc.SetTime(0.0);
-      visit_dc.Save();
-   }
 
-   // Optionally output a BP (binary pack) file using ADIOS2. This can be
-   // visualized with the ParaView VTX reader.
-#ifdef MFEM_USE_ADIOS2
-   ADIOS2DataCollection* adios2_dc = NULL;
-   if (adios2)
-   {
-      std::string postfix(mesh_file);
-      postfix.erase(0, std::string("../data/").size() );
-      postfix += "_o" + std::to_string(order);
-      postfix += "_solver" + std::to_string(ode_solver_type);
-      const std::string collection_name = "ex16-p-" + postfix + ".bp";
-
-      adios2_dc = new ADIOS2DataCollection(MPI_COMM_WORLD, collection_name, pmesh);
-      adios2_dc->SetParameter("SubStreams", std::to_string(num_procs/2) );
-      adios2_dc->RegisterField("temperature", &u_gf);
-      adios2_dc->SetCycle(0);
-      adios2_dc->SetTime(0.0);
-      adios2_dc->Save();
-   }
-#endif
-
-   socketstream sout;
-   if (visualization)
-   {
-      char vishost[] = "localhost";
-      int  visport   = 19916;
-      sout.open(vishost, visport);
-      sout << "parallel " << num_procs << " " << myid << endl;
-      int good = sout.good(), all_good;
-      MPI_Allreduce(&good, &all_good, 1, MPI_INT, MPI_MIN, pmesh->GetComm());
-      if (!all_good)
-      {
-         sout.close();
-         visualization = false;
-         if (myid == 0)
-         {
-            cout << "Unable to connect to GLVis server at "
-                 << vishost << ':' << visport << endl;
-            cout << "GLVis visualization disabled.\n";
-         }
-      }
-      else
-      {
-         sout.precision(precision);
-         sout << "solution\n" << *pmesh << u_gf;
-         sout << "pause\n";
-         sout << flush;
-         if (myid == 0)
-         {
-            cout << "GLVis visualization paused."
-                 << " Press space (in the GLVis window) to resume it.\n";
-         }
-      }
-   }
+   ParaViewDataCollection paraview_dc("monoDomain", pmesh);
+   paraview_dc.SetPrefixPath("ParaView");
+   paraview_dc.SetLevelsOfDetail(order);
+   paraview_dc.SetDataFormat(VTKFormat::BINARY);
+   paraview_dc.SetHighOrderOutput(true);
+   paraview_dc.SetCycle(0);
+   paraview_dc.SetTime(0.0);
+   paraview_dc.RegisterField("Potential",&u_gf);
+   paraview_dc.Save();
 
    // 10. Perform time-integration (looping over the time iterations, ti, with a
    //     time-step dt).
@@ -282,61 +216,18 @@ int main(int argc, char *argv[])
    bool last_step = false;
    for (int ti = 1; !last_step; ti++)
    {
-      if (t + dt >= t_final - dt/2)
-      {
-         last_step = true;
-      }
-
+      if (t + dt >= t_final - dt/2) last_step = true;
       ode_solver->Step(u, t, dt);
 
       if (last_step || (ti % vis_steps) == 0)
       {
-         if (myid == 0)
-         {
-            cout << "step " << ti << ", t = " << t << endl;
-         }
-
+         if (myid == 0) cout << "step " << ti << ", t = " << t << endl;
          u_gf.SetFromTrueDofs(u);
-         if (visualization)
-         {
-            sout << "parallel " << num_procs << " " << myid << "\n";
-            sout << "solution\n" << *pmesh << u_gf << flush;
-         }
-
-         if (visit)
-         {
-            visit_dc.SetCycle(ti);
-            visit_dc.SetTime(t);
-            visit_dc.Save();
-         }
-
-#ifdef MFEM_USE_ADIOS2
-         if (adios2)
-         {
-            adios2_dc->SetCycle(ti);
-            adios2_dc->SetTime(t);
-            adios2_dc->Save();
-         }
-#endif
+         paraview_dc.SetCycle(ti);
+         paraview_dc.SetTime(t);
+         paraview_dc.Save();
       }
       oper.SetParameters(u);
-   }
-
-#ifdef MFEM_USE_ADIOS2
-   if (adios2)
-   {
-      delete adios2_dc;
-   }
-#endif
-
-   // 11. Save the final solution in parallel. This output can be viewed later
-   //     using GLVis: "glvis -np <np> -m ex16-mesh -g ex16-final".
-   {
-      ostringstream sol_name;
-      sol_name << "MonoDomain" << setfill('0') << setw(6) << myid;
-      ofstream osol(sol_name.str().c_str());
-      osol.precision(precision);
-      u_gf.Save(osol);
    }
 
    // 12. Free the used memory.
