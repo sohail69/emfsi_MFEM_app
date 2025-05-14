@@ -1,9 +1,6 @@
 #pragma once
-
 #include "mfem.hpp"
-#include <memory>
-#include <iostream>
-#include <fstream>
+
 
 using namespace std;
 using namespace mfem;
@@ -20,7 +17,7 @@ class fibreMapPoissonOper : public Operator
 {
 protected:
    Array<int>    & _ess_bcs_markers;
-   Array<double> & _BC_Vals
+   Array<double> & _BC_Vals;
    ParFiniteElementSpace & _fespace;
    ParBilinearForm *_K;
    HypreParMatrix _Kmat;
@@ -60,7 +57,7 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
   //Construct the matrix Operators
   Array<int> ess_bcs_tdofs;
   _K = new ParBilinearForm(&_fespace);
-  _K->(new DiffusionIntegrator);
+  _K->AddDomainIntegrator(new DiffusionIntegrator);
   _K->Assemble();
   _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
   _K->FormSystemMatrix(ess_bcs_tdofs, _Kmat);
@@ -102,7 +99,7 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
   }
 
   //Solve the problem
-  _K_solver->Mult(*z,y);
+  _K_solver.Mult(*z,y);
 };
 
 /*****************************************\

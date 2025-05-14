@@ -37,6 +37,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "include/problemOperators/fibreMapPoisson.hpp"
 #include "include/problemOperators/monodomain.hpp"
 #include "include/Visualisation.hpp"
 
