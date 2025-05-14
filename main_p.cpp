@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
    Hypre::Init();
 
    // 2. Parse command-line options.
-   const char *mesh_file = "mesh/star.mesh";
+   const char *mesh_file = "mesh/beam-quad.mesh";
    int ser_ref_levels = 2;
    int par_ref_levels = 1;
    int order = 2;
@@ -196,10 +196,16 @@ int main(int argc, char *argv[])
    u_gf.GetTrueDofs(phi);
 
    // 9. Initialize the conduction operator and the VisIt visualization.
-   Array<int>     ess_bcs_markers(1);
-   Array<double>  BC_Vals(1);
-   BC_Vals = ;
-   ess_bcs_markers = 1;
+   Array<int>     ess_bcs_markers(pmesh->bdr_attributes.Max());
+   Array<double>  BC_Vals(pmesh->bdr_attributes.Max());
+   BC_Vals = 0.00;
+   ess_bcs_markers = 0;
+
+   BC_Vals[0] =  5.00;
+   ess_bcs_markers[0] = 1;
+
+   BC_Vals[1] = -5.00;
+   ess_bcs_markers[1] = 1;
 
    monodomainOper mnOper(fespace, alpha, kappa, u);
    fibreMapPoissonOper fpOper(fespace, ess_bcs_markers, BC_Vals);

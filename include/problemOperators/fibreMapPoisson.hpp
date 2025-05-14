@@ -58,10 +58,11 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
 
   //Construct the matrix Operators
   Array<int> ess_bcs_tdofs;
-  _K = new ParBilinearForm(&_fespace);
-  _K->AddDomainIntegrator(new DiffusionIntegrator);
-  _K->Assemble();
   if(_ess_bcs_markers.Size() != 0) _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
+  ConstantCoefficient one(1.00);
+  _K = new ParBilinearForm(&_fespace);
+  _K->AddDomainIntegrator(new DiffusionIntegrator(one));
+  _K->Assemble();
   _K->FormSystemMatrix(ess_bcs_tdofs, _Kmat);
 
   //Construct the solver
@@ -69,7 +70,7 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
   _K_solver.iterative_mode = false;
   _K_solver.SetRelTol(rel_tol);
   _K_solver.SetAbsTol(0.0);
-  _K_solver.SetMaxIter(100);
+  _K_solver.SetMaxIter(500);
   _K_solver.SetPrintLevel(0);
   _K_prec.SetType(HypreSmoother::Jacobi);
   _K_solver.SetPreconditioner(_K_prec);
@@ -91,13 +92,13 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 
   //Apply the BC's
   if(_BC_Vals.Size() != 0){
-    Array<int> ess_bcs_tmp(_BC_Vals.Size());
+    Array<int> ess_bcs_tmp(_BC_Vals.Size()), ess_tdofs;
     for(int I=0; I<_BC_Vals.Size(); I++){
       if(_ess_bcs_markers[I] != 0){
         ess_bcs_tmp = 0;
         ess_bcs_tmp[I] = 1;
-        ConstantCoefficient BDR_coeff(_BC_Vals[I]);
-        z->ProjectBdrCoefficient(BDR_coeff, ess_bcs_tmp);
+        _fespace.GetEssentialTrueDofs(ess_bcs_tmp, ess_tdofs);
+        z->SetSubVector(ess_tdofs,_BC_Vals[I]);
       }
     }
   }
