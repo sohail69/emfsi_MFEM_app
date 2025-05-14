@@ -19,7 +19,7 @@ using namespace mfem;
 class fibreMapPoissonOper : public Operator
 {
 protected:
-   Array<int>    & _ess_bcs;
+   Array<int>    & _ess_bcs_markers;
    Array<double> & _BC_Vals
    ParFiniteElementSpace & _fespace;
    ParBilinearForm *_K;
@@ -28,12 +28,11 @@ protected:
    CGSolver _K_solver;    // Krylov solver for inverting the mass matrix K
    HypreSmoother _K_prec; // Preconditioner for the diffusion matrix K
 
-   real_t alpha, kappa;
-   mutable Vector z; // auxiliary vector
+   mutable ParGridFunction *z; // auxiliary GFunc used for BC's
 
 public:
    //Constructs fibre map operator
-   fibreMapPoissonOper(ParFiniteElementSpace &f, Array<int> & ess_bcs, Array<double> & BC_Vals);
+   fibreMapPoissonOper(ParFiniteElementSpace &f, Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
 
    //Solves the Poisson equation
    virtual void Mult(const Vector &x, Vector &y) const;
@@ -53,24 +52,32 @@ public:
 !
 /*****************************************/
 fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
-                                       , Array<int> & ess_bcs
+                                       , Array<int> & ess_bcs_markers
                                        , Array<double> & BC_Vals): 
-                                       _ess_bcs(ess_bcs), _BC_Vals(BC_Vals), _fespace(f)
+                                       Operator(f.GetTrueVSize()), _ess_bcs_markers(ess_bcs_markers)
+                                       , _BC_Vals(BC_Vals), _fespace(f)
 {
+  //Construct the matrix Operators
+  Array<int> ess_bcs_tdofs;
   _K = new ParBilinearForm(&_fespace);
   _K->(new DiffusionIntegrator);
   _K->Assemble();
-  _K->FormSystemMatrix(_ess_bcs, _Kmat);
+  _fespace.GetEssentialTrueDofs(_ess_bcs_markers, ess_bcs_tdofs);
+  _K->FormSystemMatrix(ess_bcs_tdofs, _Kmat);
 
-   const real_t rel_tol = 1e-8;
-   _K_solver.iterative_mode = false;
-   _K_solver.SetRelTol(rel_tol);
-   _K_solver.SetAbsTol(0.0);
-   _K_solver.SetMaxIter(100);
-   _K_solver.SetPrintLevel(0);
-   _K_prec.SetType(HypreSmoother::Jacobi);
-   _K_solver.SetPreconditioner(_K_prec);
-   _K_solver.SetOperator(_Kmat);
+  //Construct the solver
+  const real_t rel_tol = 1e-8;
+  _K_solver.iterative_mode = false;
+  _K_solver.SetRelTol(rel_tol);
+  _K_solver.SetAbsTol(0.0);
+  _K_solver.SetMaxIter(100);
+  _K_solver.SetPrintLevel(0);
+  _K_prec.SetType(HypreSmoother::Jacobi);
+  _K_solver.SetPreconditioner(_K_prec);
+  _K_solver.SetOperator(_Kmat);
+
+  //Construct the temporary gridFunction
+  z = new ParGridFunction(&_fespace);
 };
 
 /*****************************************\
@@ -80,9 +87,22 @@ fibreMapPoissonOper::fibreMapPoissonOper(ParFiniteElementSpace &f
 /*****************************************/
 void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 {
-  
+  //Set the tmp Gridfunction before BCs
+  z->Distribute(&x);
 
-  _K_solver->Mult(x,y);
+  //Apply the BC's
+  Array<int> ess_bcs_tmp(_BC_Vals.Size());
+  for(int I=0; I<_BC_Vals.Size(); I++){
+    if(_ess_bcs_markers[I] != 0){
+      ess_bcs_tmp = 0;
+      ess_bcs_tmp[I] = 1;
+      ConstantCoefficient BDR_coeff(_BC_Vals[I]);
+      z->ProjectBdrCoefficient(BDR_coeff, ess_bcs_tmp);
+    }
+  }
+
+  //Solve the problem
+  _K_solver->Mult(*z,y);
 };
 
 /*****************************************\
@@ -91,7 +111,15 @@ void fibreMapPoissonOper::Mult(const Vector &x, Vector &y) const
 !
 /*****************************************/
 fibreMapPoissonOper::~fibreMapPoissonOper(){
-
-
-
+  delete _K;
+  delete z;
 };
+
+
+/*****************************************\
+!
+! Constructs the actual fibre maps and puts
+! them into a gridfunction
+!
+/*****************************************/
+void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction> FibreFields){};

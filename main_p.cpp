@@ -194,8 +194,15 @@ int main(int argc, char *argv[])
    u_gf.GetTrueDofs(u);
 
    // 9. Initialize the conduction operator and the VisIt visualization.
+   Array<int>     ess_bcs_markers;
+   Array<double>  BC_Vals;
+
    monodomainOper oper(fespace, alpha, kappa, u);
+   fibreMapPoissonOper fpOper(fespace, ess_bcs_markers, BC_Vals);
    u_gf.SetFromTrueDofs(u);
+
+
+
 
 
    ParaViewDataCollection paraview_dc("monoDomain", pmesh);
