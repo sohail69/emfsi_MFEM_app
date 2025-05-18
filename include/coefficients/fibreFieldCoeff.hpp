@@ -21,21 +21,28 @@ void Crossproduct3D(const Vector & A, const Vector & B, Vector & AxB){
 ! Rodrigues' rotation formula 
 !
 \*****************************************/
+// Kronecker delta function
+real_t kDelta(int I, int J){
+  return ((I==J) ? 1.00 : 0.00);
+}
+
 void RodriguesRotMat(const Vector & S0, const real_t & theta, DenseMatrix & R0){
   int DIM = S0.Size();
-  DenseMatrix S0x(DIM,DIM), S0TS0(DIM,DIM);
-/*
-  R0 = 0._iwp
-  CALL CROSS_PD_MATRIX(s0x, s0, ndim)
-  DO I = 1,ndim
-    DO J = 1,ndim
-      R0(I,J) = kdelta(I,J) + sin(theta)*s0x(I,J) &
-              + 2._iwp*sin(theta/2._iwp)          &
-              *sin(theta/2._iwp)*(s0(I)*s0(J) - kdelta(I,J))
-    ENDDO
-  ENDDO
-*/
+  DenseMatrix S0x(DIM,DIM);
+  real_t sinT  = sin(theta);
+  real_t sinT2 = sin(theta/2.00);
 
+  S0x(0,0)= 0.00;   S0x(0,0)=-S0(2);  S0x(0,0)= S0(1);
+  S0x(1,0)= S0(2);  S0x(1,1)= 0.00;   S0x(0,0)=-S0(0);
+  S0x(2,0)=-S0(1);  S0x(0,0)= S0(0);  S0x(2,2)= 0.00;
+
+  for(int I=0; I<DIM; I++){
+    for(int J=0; J<DIM; J++){
+      R0(I,J) = kDelta(I,J) 
+              + sinT*S0x(I,J)
+              + 2.00*sinT2*sinT2*(S0(I)*S0(J) - kDelta(I,J) );
+    }
+  }
 };
 
 /*****************************************\
@@ -72,17 +79,17 @@ public:
 void fibreFieldCoeff1::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
   real_t v_norm = 0.00;
   phi.GetGradient(T,V);
-  for(int I=0; I<V.Size();I++) v_norm += V(I)*V(I);
+  v_norm = InnerProduct(V,V);
   v_norm = sqrt(v_norm);
-  for(int I=0; I<V.Size();I++) V(I) = V(I)/v_norm;
+  V *= v_norm;
 };
 
 /*****************************************\
 !
 ! Generates the fibre field map from
-! the potential field gradient and a
-! central direction. specifically used
-! for axisymmetric geometries
+! the potential field, sheetlet vector and
+! a central direction vector. specifically
+! used for axisymmetric geometries
 !
 !  fibreFieldCoeff2 : fibre-direction
 !
@@ -116,39 +123,59 @@ public:
 // formula 
 //
 void fibreFieldCoeff2::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
-  real_t theta, phi_i, kp_norm = 0.00;
+  real_t theta, phi_i, kp_norm = 0.00, alpha = 0.00;
   DenseMatrix R0(dim,dim);
   Vector Kp(dim), f0(dim), s0;
   phi_i = phi.GetValue(T, ip);
   S0.GetVectorValue(T, ip, s0);
+  alpha = InnerProduct(s0,C0);
+  Kp = s0;
+  Kp *= -alpha;
+  Kp += C0;
+  kp_norm = sqrt(InnerProduct(Kp,Kp));
+  Kp *= kp_norm;
   theta = (theta_epi - theta_end)*phi_i + theta_end;
   Crossproduct3D(s0, Kp, f0);
   RodriguesRotMat(s0, theta, R0);
   R0.Mult(f0, V);
 };
-/*
-   real_t & theta_epi; //Epicardial fibre angle
-   real_t & theta_end; //Endocardial fibre angle
 
-  // Array<GridFunction*> & fibreBasis; //Fibre GFuncs
-  // GridFunction         & diff;       //Diffusion GFun
+/*****************************************\
+!
+! Generates the fibre field map from
+! the fibre vector and the sheetlet vector 
+! specifically used for axisymmetric
+! geometries
+!
+!  fibreFieldCoeff3 : Cross-sheet-direction
+!
+\*****************************************/
+class fibreFieldCoeff3 : public VectorCoefficient
+{
+private:
+   int dim;
+   GridFunction & F0; //Potential field GFun
+   GridFunction & S0;  //The sheetlet direction
+public:
+   /// Define a time-independent vector coefficient from a std function
+   /** vector coefficient **/
+   fibreFieldCoeff3(int dim_, GridFunction & F0_, GridFunction & S0_)
+                 : dim(dim_), VectorCoefficient(dim), F0(F0_), S0(S0_){}
 
-   real_t x[3];
-   Vector transip(x, 3);
+   /// Evaluate the vector coefficient at @a ip.
+   void Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip) override;
 
-   T.Transform(ip, transip);
+   virtual ~fibreFieldCoeff3() {}
+};
 
-   V.SetSize(vdim);
-   if (Function)
-   {
-      Function(transip, V);
-   }
-   else
-   {
-      TDFunction(transip, GetTime(), V);
-   }
-   if (Q)
-   {
-      V *= Q->Eval(T, ip, GetTime());
-   }
-*/
+//
+// Evaluate the Cross-Sheet-Direction
+// using the cross product of the
+// fibre and the sheetlet vectors
+//
+void fibreFieldCoeff3::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
+  Vector f0, s0;
+  F0.GetVectorValue(T, ip, f0);
+  S0.GetVectorValue(T, ip, s0);
+  Crossproduct3D(s0, f0, V);
+};
