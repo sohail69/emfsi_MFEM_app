@@ -5,6 +5,8 @@ using namespace std;
 using namespace mfem;
 
 /*****************************************\
+!  Author: Sohail Rathore
+!
 !
 ! produces a orthotropic matrix coefficient
 ! based on a given set of orthotropic fibre 
