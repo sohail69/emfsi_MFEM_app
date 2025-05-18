@@ -41,7 +41,6 @@
 #include "include/problemOperators/monodomain.hpp"
 #include "include/Visualisation.hpp"
 #include "include/coefficients/orthoDiffCoeff.hpp"
-#include "include/coefficients/fibreFieldCoeff.hpp"
 
 using namespace std;
 using namespace mfem;

@@ -1,6 +1,6 @@
 #pragma once
 #include "mfem.hpp"
-
+#include "../coefficients/fibreFieldCoeff.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -38,10 +38,14 @@ protected:
 
    //The Preconditioning objects
    HypreBoomerAMG *invM=NULL;
-
-
    mutable ParGridFunction *z; // auxiliary GFunc used for BC's
 
+   //Variables for the actual fibre fields 
+   //including the coefficients
+   fibreFieldCoeff1 *cf1;
+   fibreFieldCoeff2 *cf2;
+   fibreFieldCoeff3 *cf3;
+   ParLinearForm *s0=NULL, *f0=NULL, *n0=NULL;
 public:
    //Constructs fibre map operator
    fibreMapPoissonOper(ParFiniteElementSpace &f, Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
@@ -170,6 +174,21 @@ fibreMapPoissonOper::~fibreMapPoissonOper(){
 /*void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> FibreFields){
    MFEM_VERIFY(FibreFields.Size() == FibreFields[0]->GetVDim(), "The GFunc array size isn't ndim fibrePoisson");
    *z = x;
+   
+   fibreFieldCoeff1 cf1;
+   fibreFieldCoeff2 cf2;
+   fibreFieldCoeff3 cf3;
+   s0 = ParLinearForm;
+   f0 = ParLinearForm;
+   n0 = ParLinearForm;
+   Array<ParGridFunction*> & fibres;
+
+   fibreFieldCoeff1(int dim, GridFunction & phi_) : VectorCoefficient(dim), phi(phi_){}
+   fibreFieldCoeff2(int dim_, GridFunction & phi_, GridFunction & S0_
+                  , Vector C0_, real_t & theta_epi_, real_t & theta_end_)
+   fibreFieldCoeff3(int dim_, GridFunction & F0_, GridFunction & S0_)
+
+
 };*/
 
 
