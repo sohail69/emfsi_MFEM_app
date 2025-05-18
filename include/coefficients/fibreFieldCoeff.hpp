@@ -22,7 +22,8 @@ void Crossproduct3D(const Vector & A, const Vector & B, Vector & AxB){
 !
 \*****************************************/
 void RodriguesRotMat(const Vector & S0, const real_t & theta, DenseMatrix & R0){
-
+  int DIM = S0.Size();
+  DenseMatrix S0x(DIM,DIM), S0TS0(DIM,DIM);
 /*
   R0 = 0._iwp
   CALL CROSS_PD_MATRIX(s0x, s0, ndim)
