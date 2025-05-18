@@ -54,7 +54,7 @@ public:
 
    //Gets a grid-function array of the vector basis
    //needed to define the fibre fields
-   void getFibreMapGFuncs(const Vector &x, Array<ParGridFunction> FibreFields);
+//   void getFibreMapGFuncs(const Vector &x, Array<ParGridFunction> FibreFields);
 };
 
 /*****************************************\
@@ -167,10 +167,22 @@ fibreMapPoissonOper::~fibreMapPoissonOper(){
 ! them into a gridfunction
 !
 \*****************************************/
-void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> FibreFields){
+/*void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> FibreFields){
    MFEM_VERIFY(FibreFields.Size() == FibreFields[0]->GetVDim(), "The GFunc array size isn't ndim fibrePoisson");
    *z = x;
-   for(int I=0; I<FibreFields.Size(); I++){
-     z->GetGradient(ElementTransformation &tr, Vector &grad) const;
-   }
-};
+};*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

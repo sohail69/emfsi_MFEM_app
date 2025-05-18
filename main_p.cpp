@@ -40,6 +40,7 @@
 #include "include/problemOperators/fibreMapPoisson.hpp"
 #include "include/problemOperators/monodomain.hpp"
 #include "include/Visualisation.hpp"
+#include "include/coefficients/orthoDiffCoeff.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -185,6 +186,7 @@ int main(int argc, char *argv[])
       cout << "Number of temperature unknowns: " << fe_size << endl;
    }
 
+   Array<ParGridFunction*> fibre(dim);
    ParGridFunction u_gf(&fespace), f_gf(&fespace);
 
    // 8. Set the initial conditions for u. All boundaries are considered
