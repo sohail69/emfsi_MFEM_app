@@ -14,7 +14,6 @@ int CellType_mask(double phi){
   return ((phi <= 0.6) ? 5 : ((phi <= 0.9) ? 4 : 3));
 }
 
-
 /*****************************************\
 !
 ! Solves the poisson equation and generates
@@ -58,7 +57,7 @@ public:
 
    //Gets a grid-function array of the vector basis
    //needed to define the fibre fields
-//   void getFibreMapGFuncs(const Vector &x, Array<ParGridFunction> FibreFields);
+   void getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> & FibreFields);
 };
 
 /*****************************************\
@@ -171,37 +170,33 @@ fibreMapPoissonOper::~fibreMapPoissonOper(){
 ! them into a gridfunction
 !
 \*****************************************/
-/*void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> FibreFields){
-   MFEM_VERIFY(FibreFields.Size() == FibreFields[0]->GetVDim(), "The GFunc array size isn't ndim fibrePoisson");
+void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> & FibreFields){
+   int dim = 3;
    *z = x;
-   
-   fibreFieldCoeff1 cf1;
-   fibreFieldCoeff2 cf2;
-   fibreFieldCoeff3 cf3;
-   s0 = ParLinearForm;
-   f0 = ParLinearForm;
-   n0 = ParLinearForm;
-   Array<ParGridFunction*> & fibres;
+   real_t PI=3.14159265;
+   Vector C0(3); C0(0)=0.0; C0(1)=1.0; C0(2)=0.0;
+   real_t theta_epi=(60.0*PI/180.0), theta_end=(-60.0*PI/180.0);
+   if(s0 == NULL) s0 = new ParLinearForm( FibreFields[0]->ParFESpace());
+   if(f0 == NULL) f0 = new ParLinearForm( FibreFields[1]->ParFESpace());
+   if(n0 == NULL) n0 = new ParLinearForm( FibreFields[2]->ParFESpace());
 
-   fibreFieldCoeff1(int dim, GridFunction & phi_) : VectorCoefficient(dim), phi(phi_){}
-   fibreFieldCoeff2(int dim_, GridFunction & phi_, GridFunction & S0_
-                  , Vector C0_, real_t & theta_epi_, real_t & theta_end_)
-   fibreFieldCoeff3(int dim_, GridFunction & F0_, GridFunction & S0_)
+   if(cf1 == NULL) cf1 = new fibreFieldCoeff1(dim, *z);
+   s0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf1));
+   s0->Assemble();
+   s0->ParallelAssemble(*FibreFields[0]);
 
+   if(cf2 == NULL) cf2 = new fibreFieldCoeff2(dim, *z, *FibreFields[0], C0, theta_epi, theta_end);
+   f0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf2));
+   f0->Assemble();
+   f0->ParallelAssemble(*FibreFields[1]);
 
-};*/
+   if(cf3 == NULL) cf3 = new fibreFieldCoeff3(dim, *FibreFields[1], *FibreFields[0]);
+   n0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf2));
+   n0->Assemble();
+   n0->ParallelAssemble(*FibreFields[2]);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+   delete s0, f0, n0;
+   delete cf1, cf2, cf3;
+   s0=NULL; f0=NULL; n0=NULL;
+   cf1=NULL; cf2=NULL; cf3=NULL;
+};
