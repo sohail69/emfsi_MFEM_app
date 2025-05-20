@@ -10,10 +10,8 @@ using namespace mfem;
 
 /*****************************************\
 !
-! Solves the orthotropic-diffusion
-! coefficient heat equation for a single
-! time-step (This is for usage in the 
-! mono-domain equation which is equivalent)
+! Solves the Incompressible Navier-Stokes
+! equation
 !
 /*****************************************/
 class navierStokesOper : public TimeDependentOperator
@@ -21,14 +19,10 @@ class navierStokesOper : public TimeDependentOperator
 protected:
    Array<int> empty_tdofs;
    ParFiniteElementSpace &fespace;
+   ParBilinearForm *M=NULL, *K=NULL;
 
-   MatrixCoefficient *diffCoef;
-   ParBilinearForm *M;
-   ParBilinearForm *K;
-
-   HypreParMatrix Mmat;
-   HypreParMatrix Kmat;
-   HypreParMatrix *T; // T = M + dt K
+   HypreParMatrix Mmat, Kmat;
+   HypreParMatrix *T=NULL; // T = M + dt K
    real_t current_dt;
 
    CGSolver M_solver;    // Krylov solver for inverting the mass matrix M
@@ -36,22 +30,16 @@ protected:
 
    CGSolver T_solver;    // Implicit solver for T = M + dt K
    HypreSmoother T_prec; // Preconditioner for the implicit solver
-   
-   real_t alpha, kappa;
    mutable Vector z; // auxiliary vector
 
 public:
-   navierStokesOper(ParFiniteElementSpace &f, real_t alpha, real_t kappa,
-                      const Vector &u);
+   navierStokesOper(ParFiniteElementSpace &f, MatrixCoefficient &D_ij_, real_t &dt);
 
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
    /** Solve the Backward-Euler equation: k = f(u + dt*k, t), for the unknown k.
        This is the only requirement for high-order SDIRK implicit integration.*/
    virtual void ImplicitSolve(const real_t dt, const Vector &u, Vector &k);
-
-   /// Update the diffusion BilinearForm K using the given true-dof vector `u`.
-   void SetParameters(const Vector &u);
 
    virtual ~navierStokesOper();
 };
@@ -63,7 +51,7 @@ public:
 ! problem class
 !
 /*****************************************/
-navierStokesOper::navierStokesOper(ParFiniteElementSpace &f, real_t al, real_t kap, const Vector &u)
+navierStokesOper::navierStokesOper(ParFiniteElementSpace &f)
    : TimeDependentOperator(f.GetTrueVSize(), (real_t) 0.0), fespace(f),
      M(NULL), K(NULL), T(NULL), current_dt(0.0),
      M_solver(f.GetComm()), T_solver(f.GetComm()), z(height)
@@ -75,6 +63,11 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace &f, real_t al, real_t k
    M->Assemble(0); // keep sparsity pattern of M and K the same
    M->FormSystemMatrix(empty_tdofs, Mmat);
 
+   K = new ParBilinearForm(&fespace);
+   K->AddDomainIntegrator(new DiffusionIntegrator(D_ij));
+   K->Assemble(0); // keep sparsity pattern of M and K the same
+   K->FormSystemMatrix(empty_tdofs, Kmat);
+
    M_solver.iterative_mode = false;
    M_solver.SetRelTol(rel_tol);
    M_solver.SetAbsTol(0.0);
@@ -84,17 +77,12 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace &f, real_t al, real_t k
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(Mmat);
 
-   alpha = al;
-   kappa = kap;
-
    T_solver.iterative_mode = false;
    T_solver.SetRelTol(rel_tol);
    T_solver.SetAbsTol(0.0);
    T_solver.SetMaxIter(100);
    T_solver.SetPrintLevel(0);
    T_solver.SetPreconditioner(T_prec);
-
-   SetParameters(u);
 };
 
 /*****************************************\
@@ -122,8 +110,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 !
 /*****************************************/
 void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
-   if (!T)
-   {
+   if (!T){
       T = Add(1.0, Mmat, dt, Kmat);
       current_dt = dt;
       T_solver.SetOperator(*T);
@@ -132,32 +119,6 @@ void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k
    Kmat.Mult(u, z);
    z.Neg();
    T_solver.Mult(z, k);
-};
-
-/*****************************************\
-!
-! Update the diffusion BilinearForm K 
-! using the given true-dof vector `u`.
-! reconstructs the K-matrix
-!
-/*****************************************/
-void navierStokesOper::SetParameters(const Vector &u){
-   ParGridFunction u_alpha_gf(&fespace);
-   u_alpha_gf.SetFromTrueDofs(u);
-   for (int i = 0; i < u_alpha_gf.Size(); i++)
-   {
-      u_alpha_gf(i) = kappa + alpha*u_alpha_gf(i);
-   }
-
-   delete K;
-   K = new ParBilinearForm(&fespace);
-
-   GridFunctionCoefficient u_coeff(&u_alpha_gf);
-   K->AddDomainIntegrator(new DiffusionIntegrator(u_coeff));
-   K->Assemble(0); // keep sparsity pattern of M and K the same
-   K->FormSystemMatrix(empty_tdofs, Kmat);
-   delete T;
-   T = NULL; // re-compute T on the next ImplicitSolve
 };
 
 /*****************************************\

@@ -15,6 +15,11 @@ void Crossproduct3D(const Vector & A, const Vector & B, Vector & AxB){
   AxB(2) = A(0)*B(1) - A(1)*B(0);
 };
 
+void OrthoVec2D(const Vector & A, Vector & B){
+  B(0) =  A(1);
+  B(1) = -A(0);
+};
+
 /*****************************************\
 !
 ! Calculate a rotation matrix using the
@@ -58,12 +63,13 @@ void RodriguesRotMat(const Vector & S0, const real_t & theta, DenseMatrix & R0){
 class fibreFieldCoeff1 : public VectorCoefficient
 {
 private:
-   GridFunction & phi; //Potential field GFun
+   int dim;
+   GridFunction *phi; //Potential field GFun
 
 public:
    /// Define a time-independent vector coefficient from a std function
    /** vector coefficient **/
-   fibreFieldCoeff1(int dim, GridFunction & phi_) : VectorCoefficient(dim), phi(phi_){}
+   fibreFieldCoeff1(int dim_, GridFunction *phi_) : dim(dim_), VectorCoefficient(dim), phi(phi_){}
 
    /// Evaluate the vector coefficient at @a ip.
    void Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip) override;
@@ -77,11 +83,12 @@ public:
 // field
 //
 void fibreFieldCoeff1::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
-  real_t v_norm = 0.00;
-  phi.GetGradient(T,V);
-  v_norm = InnerProduct(V,V);
-  v_norm = sqrt(v_norm);
-  V *= v_norm;
+  if(V.Size() != dim) V.SetSize(dim);
+  real_t v_normInv = 0.00, tol = 1.0E-15;
+  phi->GetGradient(T,V);
+  for(int I=0; I<dim; I++) v_normInv += V(I)*V(I);
+  v_normInv = 1.00/sqrt(v_normInv);
+  V *= v_normInv;
 };
 
 /*****************************************\
@@ -179,3 +186,51 @@ void fibreFieldCoeff3::Eval(Vector &V, ElementTransformation &T, const Integrati
   S0.GetVectorValue(T, ip, s0);
   Crossproduct3D(s0, f0, V);
 };
+
+/*****************************************\
+!
+! Generates the fibre field map from
+! the fibre vector specifically used for
+! 2D geometries
+!
+!  fibreFieldCoeff4 : 2D Cross-sheet-direction
+!
+\*****************************************/
+class fibreFieldCoeff4 : public VectorCoefficient
+{
+private:
+   int dim;
+   GridFunction *F0; //Potential field GFun
+public:
+   /// Define a time-independent vector coefficient from a std function
+   /** vector coefficient **/
+   fibreFieldCoeff4(int dim_, GridFunction *F0_)
+                 : dim(dim_), VectorCoefficient(dim), F0(F0_){}
+
+   /// Evaluate the vector coefficient at @a ip.
+   void Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip) override;
+
+   virtual ~fibreFieldCoeff4() {}
+};
+
+//
+// Evaluate the Cross-Sheet-Direction
+// using the cross product of the
+// fibre and the sheetlet vectors
+//
+void fibreFieldCoeff4::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
+  if(V.Size() != dim) V.SetSize(dim);
+  Vector f0(dim);
+  F0->GetVectorValue(T, ip, f0);
+  OrthoVec2D(f0, V);
+};
+
+
+
+
+
+
+
+
+
+

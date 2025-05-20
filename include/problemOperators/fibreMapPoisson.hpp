@@ -41,10 +41,10 @@ protected:
 
    //Variables for the actual fibre fields 
    //including the coefficients
-   fibreFieldCoeff1 *cf1;
-   fibreFieldCoeff2 *cf2;
-   fibreFieldCoeff3 *cf3;
-   ParLinearForm *s0=NULL, *f0=NULL, *n0=NULL;
+   fibreFieldCoeff1 *cf1=NULL;
+   fibreFieldCoeff2 *cf2=NULL;
+   fibreFieldCoeff3 *cf3=NULL;
+   fibreFieldCoeff4 *cf4=NULL;
 public:
    //Constructs fibre map operator
    fibreMapPoissonOper(ParFiniteElementSpace &f, Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
@@ -57,7 +57,8 @@ public:
 
    //Gets a grid-function array of the vector basis
    //needed to define the fibre fields
-   void getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> & FibreFields);
+   void getFibreMapGFuncs3D(const Vector &x, Array<ParGridFunction*> & FibreFields);
+   void getFibreMapGFuncs2D(const Vector &x, Array<ParGridFunction*> & FibreFields);
 };
 
 /*****************************************\
@@ -167,36 +168,46 @@ fibreMapPoissonOper::~fibreMapPoissonOper(){
 /*****************************************\
 !
 ! Constructs the actual fibre maps and puts
-! them into a gridfunction
+! them into a gridfunction 3D
 !
 \*****************************************/
-void fibreMapPoissonOper::getFibreMapGFuncs(const Vector &x, Array<ParGridFunction*> & FibreFields){
-   int dim = 3;
+void fibreMapPoissonOper::getFibreMapGFuncs3D(const Vector &x, Array<ParGridFunction*> & FibreFields){
+   const int dim = 3;
    *z = x;
    real_t PI=3.14159265;
-   Vector C0(3); C0(0)=0.0; C0(1)=1.0; C0(2)=0.0;
+   Vector C0(dim); 
    real_t theta_epi=(60.0*PI/180.0), theta_end=(-60.0*PI/180.0);
-   if(s0 == NULL) s0 = new ParLinearForm( FibreFields[0]->ParFESpace());
-   if(f0 == NULL) f0 = new ParLinearForm( FibreFields[1]->ParFESpace());
-   if(n0 == NULL) n0 = new ParLinearForm( FibreFields[2]->ParFESpace());
+   C0(0)=0.0;     C0(1)=1.0;   C0(2)=0.0;
 
-   if(cf1 == NULL) cf1 = new fibreFieldCoeff1(dim, *z);
-   s0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf1));
-   s0->Assemble();
-   s0->ParallelAssemble(*FibreFields[0]);
+   if(cf1 == NULL) cf1 = new fibreFieldCoeff1(dim, z);
+   FibreFields[0]->ProjectCoefficient(*cf1);
 
    if(cf2 == NULL) cf2 = new fibreFieldCoeff2(dim, *z, *FibreFields[0], C0, theta_epi, theta_end);
-   f0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf2));
-   f0->Assemble();
-   f0->ParallelAssemble(*FibreFields[1]);
+   FibreFields[1]->ProjectCoefficient(*cf2);
 
    if(cf3 == NULL) cf3 = new fibreFieldCoeff3(dim, *FibreFields[1], *FibreFields[0]);
-   n0->AddDomainIntegrator(new VectorDomainLFIntegrator(*cf2));
-   n0->Assemble();
-   n0->ParallelAssemble(*FibreFields[2]);
+   FibreFields[2]->ProjectCoefficient(*cf3);
 
-   delete s0, f0, n0;
    delete cf1, cf2, cf3;
-   s0=NULL; f0=NULL; n0=NULL;
    cf1=NULL; cf2=NULL; cf3=NULL;
+};
+
+/*****************************************\
+!
+! Constructs the actual fibre maps and puts
+! them into a gridfunction 2D
+!
+\*****************************************/
+void fibreMapPoissonOper::getFibreMapGFuncs2D(const Vector &x, Array<ParGridFunction*> & FibreFields){
+   const int dim = 2;
+   *z = x;
+
+   if(cf1 == NULL) cf1 = new fibreFieldCoeff1(dim, z);
+   FibreFields[0]->ProjectCoefficient(*cf1);
+
+   if(cf4 == NULL) cf4 = new fibreFieldCoeff4(dim, FibreFields[0]);
+   FibreFields[1]->ProjectCoefficient(*cf4);
+
+   delete cf1, cf4;
+   cf1=NULL; cf4=NULL;
 };

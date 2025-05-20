@@ -160,31 +160,23 @@ int main(int argc, char *argv[])
    // 5. Refine the mesh in serial to increase the resolution. In this example
    //    we do 'ser_ref_levels' of uniform refinement, where 'ser_ref_levels' is
    //    a command-line parameter.
-   for (int lev = 0; lev < ser_ref_levels; lev++)
-   {
-      mesh->UniformRefinement();
-   }
+   for (int lev = 0; lev < ser_ref_levels; lev++) mesh->UniformRefinement();
 
    // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
    //    this mesh further in parallel to increase the resolution. Once the
    //    parallel mesh is defined, the serial mesh can be deleted.
    ParMesh *pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
    delete mesh;
-   for (int lev = 0; lev < par_ref_levels; lev++)
-   {
-      pmesh->UniformRefinement();
-   }
+   for (int lev = 0; lev < par_ref_levels; lev++) pmesh->UniformRefinement();
 
    // 7. Define the vector finite element space representing the current and the
    //    initial temperature, u_ref.
    H1_FECollection fe_coll(order, dim);
    ParFiniteElementSpace fespace(pmesh, &fe_coll);
+   ParFiniteElementSpace vecFespace(pmesh, &fe_coll,dim);
 
    HYPRE_BigInt fe_size = fespace.GlobalTrueVSize();
-   if (myid == 0)
-   {
-      cout << "Number of temperature unknowns: " << fe_size << endl;
-   }
+   if (myid == 0) cout << "Number of temperature unknowns: " << fe_size << endl;
 
    Array<ParGridFunction*> fibre(dim);
    ParGridFunction u_gf(&fespace), f_gf(&fespace);
@@ -197,34 +189,60 @@ int main(int argc, char *argv[])
    u_gf.GetTrueDofs(u);
    u_gf.GetTrueDofs(phi);
 
-   // 9. Initialize the conduction operator and the VisIt visualization.
+   /*****************************************\
+   !
+   ! Construct the fibre map then the
+   ! diffusion coefficient
+   !
+   \*****************************************/
+   //The BC's
    Array<int>     ess_bcs_markers(pmesh->bdr_attributes.Max());
    Array<double>  BC_Vals(pmesh->bdr_attributes.Max());
    BC_Vals = 0.00;
    ess_bcs_markers = 0;
-
    BC_Vals[0] =  5.00;
    ess_bcs_markers[0] = 1;
-
-   BC_Vals[1] = 0.00;
+   BC_Vals[1] = -5.00;
    ess_bcs_markers[1] = 1;
 
-   monodomainOper mnOper(fespace, alpha, kappa, u);
+   //Construct the operator
+   //and solve the system
    fibreMapPoissonOper fpOper(fespace, ess_bcs_markers, BC_Vals);
+   f_gf = u_gf;
+   fpOper.Mult(f_gf,phi);
+
+   //Construct the fibre field
+   for(int I=0; I<dim; I++) fibre[I] = new ParGridFunction(&vecFespace);
+   fpOper.getFibreMapGFuncs2D(phi, fibre);
+//   orthoDiffGFuncCoeff(Array<GridFunction*> & fibreBasis_, GridFunction & diff_, unsigned dim_)
+
+
+   /*****************************************\
+   !
+   ! Construct the fibre map then the
+   ! diffusion coefficient
+   !
+   \*****************************************/
+   DenseMatrix DMat(dim);
+   DMat(0,0) = 1.00; DMat(0,1) = 0.00; //DMat(0,2) = 0.00;
+   DMat(1,0) = 0.00; DMat(1,1) = 1.00;// DMat(1,2) = 0.00;
+ //  DMat(1,0) = 0.00; DMat(2,1) = 0.00; DMat(2,2) = 1.00;
+   MatrixConstantCoefficient D_ij(DMat);
+   monodomainOper mnOper(fespace, D_ij);
+
    u_gf.SetFromTrueDofs(u);
    u_gf.SetFromTrueDofs(phi);
-   f_gf = u_gf;
-
 
    ParaViewDataCollection paraview_dc("monoDomain", pmesh);
    paraview_dc.SetPrefixPath("ParaView");
    paraview_dc.SetLevelsOfDetail(order);
-   paraview_dc.SetDataFormat(VTKFormat::BINARY);
+   paraview_dc.SetDataFormat(VTKFormat::ASCII);
    paraview_dc.SetHighOrderOutput(true);
    paraview_dc.SetCycle(0);
    paraview_dc.SetTime(0.0);
    paraview_dc.RegisterField("Potential",&u_gf);
    paraview_dc.RegisterField("Phi",&f_gf);
+   for(int I=0; I<dim; I++) paraview_dc.RegisterField("f_"+to_string(I),fibre[I]);
    paraview_dc.Save();
 
    // 10. Perform time-integration (looping over the time iterations, ti, with a
@@ -238,7 +256,6 @@ int main(int argc, char *argv[])
    {
       if (t + dt >= t_final - dt/2) last_step = true;
       ode_solver->Step(u, t, dt);
-      fpOper.Mult(f_gf,phi);
 
       if (last_step || (ti % vis_steps) == 0)
       {
@@ -249,12 +266,11 @@ int main(int argc, char *argv[])
          paraview_dc.SetTime(t);
          paraview_dc.Save();
       }
-      mnOper.SetParameters(u);
    }
 
    // 12. Free the used memory.
    delete ode_solver;
    delete pmesh;
-
+   for(int I=0; I<dim; I++) delete fibre[I];
    return 0;
 }
