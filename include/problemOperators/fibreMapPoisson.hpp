@@ -201,13 +201,12 @@ void fibreMapPoissonOper::getFibreMapGFuncs3D(const Vector &x, Array<ParGridFunc
 void fibreMapPoissonOper::getFibreMapGFuncs2D(const Vector &x, Array<ParGridFunction*> & FibreFields){
    const int dim = 2;
    *z = x;
-
+   if(cf1 != NULL){ delete cf1; cf1=NULL;}
+   if(cf4 != NULL){ delete cf4; cf4=NULL;} 
+  
    if(cf1 == NULL) cf1 = new fibreFieldCoeff1(dim, z);
    FibreFields[0]->ProjectCoefficient(*cf1);
 
    if(cf4 == NULL) cf4 = new fibreFieldCoeff4(dim, FibreFields[0]);
    FibreFields[1]->ProjectCoefficient(*cf4);
-
-   delete cf1, cf4;
-   cf1=NULL; cf4=NULL;
 };

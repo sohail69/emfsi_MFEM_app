@@ -130,6 +130,7 @@ public:
 // formula 
 //
 void fibreFieldCoeff2::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
+  if(V.Size() != dim) V.SetSize(dim);
   real_t theta, phi_i, kp_norm = 0.00, alpha = 0.00;
   DenseMatrix R0(dim,dim);
   Vector Kp(dim), f0(dim), s0;
@@ -181,7 +182,8 @@ public:
 // fibre and the sheetlet vectors
 //
 void fibreFieldCoeff3::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
-  Vector f0, s0;
+  if(V.Size() != dim) V.SetSize(dim);
+  Vector f0(dim), s0(dim);
   F0.GetVectorValue(T, ip, f0);
   S0.GetVectorValue(T, ip, s0);
   Crossproduct3D(s0, f0, V);
@@ -214,9 +216,7 @@ public:
 };
 
 //
-// Evaluate the Cross-Sheet-Direction
-// using the cross product of the
-// fibre and the sheetlet vectors
+// Evaluate the 2D Cross-sheet-direction
 //
 void fibreFieldCoeff4::Eval(Vector &V, ElementTransformation &T, const IntegrationPoint &ip){
   if(V.Size() != dim) V.SetSize(dim);
@@ -224,13 +224,3 @@ void fibreFieldCoeff4::Eval(Vector &V, ElementTransformation &T, const Integrati
   F0->GetVectorValue(T, ip, f0);
   OrthoVec2D(f0, V);
 };
-
-
-
-
-
-
-
-
-
-

@@ -34,6 +34,7 @@
 //               example.
 
 #include "mfem.hpp"
+#include <vector>
 #include <fstream>
 #include <iostream>
 
@@ -191,8 +192,7 @@ int main(int argc, char *argv[])
 
    /*****************************************\
    !
-   ! Construct the fibre map then the
-   ! diffusion coefficient
+   ! Construct the fibre map
    !
    \*****************************************/
    //The BC's
@@ -214,22 +214,24 @@ int main(int argc, char *argv[])
    //Construct the fibre field
    for(int I=0; I<dim; I++) fibre[I] = new ParGridFunction(&vecFespace);
    fpOper.getFibreMapGFuncs2D(phi, fibre);
-//   orthoDiffGFuncCoeff(Array<GridFunction*> & fibreBasis_, GridFunction & diff_, unsigned dim_)
+
+   /*****************************************\
+   !
+   ! Construct the diffusion coefficient
+   ! and set-up the monodomain equation
+   ! operator
+   !
+   \*****************************************/
+   Vector diff(dim); diff = 0.1;
+   orthoDiffCoeff D_ij(&fibre, diff,  dim);
+   monodomainOper mnOper(fespace, D_ij);
 
 
    /*****************************************\
    !
-   ! Construct the fibre map then the
-   ! diffusion coefficient
+   ! Run the time-stepping problem
    !
    \*****************************************/
-   DenseMatrix DMat(dim);
-   DMat(0,0) = 1.00; DMat(0,1) = 0.00; //DMat(0,2) = 0.00;
-   DMat(1,0) = 0.00; DMat(1,1) = 1.00;// DMat(1,2) = 0.00;
- //  DMat(1,0) = 0.00; DMat(2,1) = 0.00; DMat(2,2) = 1.00;
-   MatrixConstantCoefficient D_ij(DMat);
-   monodomainOper mnOper(fespace, D_ij);
-
    u_gf.SetFromTrueDofs(u);
    u_gf.SetFromTrueDofs(phi);
 
