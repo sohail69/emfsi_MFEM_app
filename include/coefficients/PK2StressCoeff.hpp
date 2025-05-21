@@ -40,52 +40,55 @@
 #include "mfem.hpp"
 
 
-class PK2StressCoeff : MatrixCoefficient
+
+
+class PK2StressCoeff : public MatrixCoefficient
 {
-protected:
-   int height, width;
-   std::function<void(const DenseMatrix &K)> S_IJ;
+private:
+  Array<ParGridFunction*> *fibreBasis; //Fibre GFuncs
+  ParGridFunction *u;                  //Displacement field
+  ParGridFunction *p;                  //Pressure field
 
+  const int & dim;
 public:
-   /// Construct a h x w matrix coefficient.
-   PK2StressCoeff(int h, int w, bool symm=false) :
-      height(h), width(w), time(0.), symmetric(symm) { }
+   //Define the Orthotropic diffusion coefficient
+   //matrix, using a vector of scalar diff coeffs
+   //and an array of vector fibre fields
+   PK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, const Vector & diff_, const int & dim_)
+      :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), diff_v(diff_){};
 
-   /// Construct the matrix coefficients
-   PK2StressCoeff(GridFunction & GFuncs)
+   using MatrixCoefficient::Eval;
 
-   /** @brief Evaluate the matrix coefficient in the element described by @a T
-       at the point @a ip, storing the result in @a K. */
-   /** @note When this method is called, the caller must make sure that the
-       IntegrationPoint associated with @a T is the same as @a ip. This can be
-       achieved by calling T.SetIntPoint(&ip). */
-   virtual void Eval(DenseMatrix &K, ElementTransformation &T,
-                     const IntegrationPoint &ip) = 0;
+   /// Evaluate the matrix coefficient at @a ip.l
+   void Eval(DenseMatrix &K, ElementTransformation &T, const IntegrationPoint &ip) override;
 
-   /// @brief Fill the QuadratureFunction @a qf by evaluating the coefficient at
-   /// the quadrature points. The matrix will be transposed or not according to
-   /// the boolean argument @a transpose.
-   ///
-   /// The @a vdim of the QuadratureFunction should be equal to the height times
-   /// the width of the matrix.
-   virtual void Project(QuadratureFunction &qf, bool transpose=false);
+   virtual ~PK2StressCoeff(){};
 };
 
 
+// Evaluate the diffusion tensor at the 
+// integration points
+// The diffusion tensor is given as
+// D_ij = a_p (f_i f_j)_p
+void PK2StressCoeff::Eval(DenseMatrix &DiffMat, ElementTransformation &T,const IntegrationPoint &ip){
+  if(DiffMat.Size() != dim)  DiffMat.SetSize(dim);
+
+  //Zero out the matrix
+  for(int J=0; J<dim; J++)
+    for(int K=0; K<dim; K++)
+      DiffMat(J,K) = 0.00;
 
 
-/*****************************************\
-!
-! Evaluate the diffusion tensor at the 
-! integration points
-!
-! The diffusion tensor is given as
-! D_ij = a_p (f_i f_j)_p
-!
-\*****************************************/
-void Eval(DenseMatrix &K, ElementTransformation &T,const IntegrationPoint &ip){
-
- 
-
+  //Add the Orthotropic Components
+  for(int I=0; I<dim; I++){
+    Vector f_i;
+    (*fibreBasis)[I]->GetVectorValue(T, ip, f_i);
+    for(int J=0; J<dim; J++){
+      for(int K=0; K<dim; K++){
+        if(J==K) DiffMat(J,K) += diff_v(I) * f_i(J) * f_i(K);
+      }
+    }
+  }
+};
 };
 
