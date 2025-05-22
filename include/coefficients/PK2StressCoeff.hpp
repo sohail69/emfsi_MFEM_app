@@ -39,56 +39,66 @@
 #include <functional>
 #include "mfem.hpp"
 
+real_t kDelta(I,J){return ( (I==J)? 1.00:0.00);};
 
-
-
-class PK2StressCoeff : public MatrixCoefficient
+class NeoHookeanPK2StressCoeff : public MatrixCoefficient
 {
 private:
+  //Sources of Data
   Array<ParGridFunction*> *fibreBasis; //Fibre GFuncs
+  ParGridFunction *gama;               //Active strain field
   ParGridFunction *u;                  //Displacement field
   ParGridFunction *p;                  //Pressure field
-
   const int & dim;
+  const real_t Y=1.00, nu=0.499999;
+  real_t mu, lmbda;
 public:
    //Define the Orthotropic diffusion coefficient
    //matrix, using a vector of scalar diff coeffs
    //and an array of vector fibre fields
-   PK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, const Vector & diff_, const int & dim_)
-      :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), diff_v(diff_){};
+   NeoHookeanPK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, const Vector & diff_, const int & dim_)
+      :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), diff_v(diff_)
+  {
+    mu    = (4.60/2.20)/(Y/(2.00+2.00*nu));
+    lmbda = Y*nu/((1.00+nu)*(1.00-2.00*nu));
+  };
 
    using MatrixCoefficient::Eval;
 
    /// Evaluate the matrix coefficient at @a ip.l
-   void Eval(DenseMatrix &K, ElementTransformation &T, const IntegrationPoint &ip) override;
+   void Eval(DenseMatrix &rho_ij, ElementTransformation &T, const IntegrationPoint &ip) override;
 
-   virtual ~PK2StressCoeff(){};
+   virtual ~NeoHookeanPK2StressCoeff(){};
 };
 
 
-// Evaluate the diffusion tensor at the 
+// Evaluate the Stress tensor at the 
 // integration points
 // The diffusion tensor is given as
-// D_ij = a_p (f_i f_j)_p
-void PK2StressCoeff::Eval(DenseMatrix &DiffMat, ElementTransformation &T,const IntegrationPoint &ip){
-  if(DiffMat.Size() != dim)  DiffMat.SetSize(dim);
+void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &T,const IntegrationPoint &ip){
+  if(rho_ij.Size() != dim)  rho_ij.SetSize(dim);
+  DenseMatrix S_ij(dim), gradU(dim)
 
-  //Zero out the matrix
-  for(int J=0; J<dim; J++)
-    for(int K=0; K<dim; K++)
-      DiffMat(J,K) = 0.00;
-
-
-  //Add the Orthotropic Components
+  //Calculate deformation measures
   for(int I=0; I<dim; I++){
-    Vector f_i;
-    (*fibreBasis)[I]->GetVectorValue(T, ip, f_i);
+    for(int J=0; J<dim; J++){
+    }
+  }
+
+  //Calculate S_ij
+  for(int I=0; I<dim; I++){
+    for(int J=0; J<dim; J++){
+    }
+  }  
+
+  //Calculate rho_ij
+  for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
       for(int K=0; K<dim; K++){
-        if(J==K) DiffMat(J,K) += diff_v(I) * f_i(J) * f_i(K);
+        rho_ij(I,J) = (S_ij(I,K) + S_ij(K,I))*gradU(K,J) + S_ij(I,K)*kDelta(K,J);
       }
     }
   }
 };
-};
+
 
