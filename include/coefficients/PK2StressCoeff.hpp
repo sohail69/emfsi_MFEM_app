@@ -87,10 +87,12 @@ void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &
   Vector gs0, gf0, gn0;
 
   //Get values at local Ip and calc
-  //active strain
+  //the active strain
   #pragma unroll
   for(int I=0; I<dim; I++) fibreBasis->GetVectorValue(T, ip, *f0[I]);
-  gs0 = gama->GetValue(T, ip);
+  gf0 = -gama->GetValue(T, ip);
+  gs0 =  4.00*gf0;
+  gn0 =  (1.00/((1.00 + gf0)*(1.00 + gn0))) - 1.00;
 
   //Calculate deformation measures
   #pragma unroll

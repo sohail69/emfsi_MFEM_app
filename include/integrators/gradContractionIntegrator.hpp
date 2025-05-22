@@ -18,12 +18,12 @@ class gradContractionIntegrator : public DeltaLFIntegrator
 {
 private:
    Vector shape, Qvec;
-   VectorCoefficient &Q;
+   MatrixCoefficient &Q;
    DenseMatrix dshape;
 
 public:
    /// Constructs the domain integrator (Q, grad v)
-   VectorDomainLFGradIntegrator(VectorCoefficient &QF)
+   VectorDomainLFGradIntegrator(MatrixCoefficient &QF)
       : DeltaLFIntegrator(QF), Q(QF) { }
 
    bool SupportsDevice() const override { return true; }
@@ -47,5 +47,5 @@ public:
 };
 
 //
-// Assemble the 
+// Assemble the element Vector
 //
