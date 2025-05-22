@@ -8,7 +8,7 @@
 ! case, used for the evaluation of the
 ! following form:
 !
-! rho_ij = (S_ik + S_ki)*(du_k/dx_j)+S_ik*d_kj 
+! rho_ij = (S_ik + S_ki)*(du_k/dx_j)+S_ik*d_kj + S_jk d_ki
 ! (1)
 !
 ! This is from the solid mechanics energy
@@ -22,7 +22,7 @@
 ! strain measure, it is given by the 
 ! following expression:
 !
-! (du_k/dx_i)*(du_k/dx_j)+2*d_ik*(du_k/dx_j)
+! 0.5*(du_k/dx_i)*(du_k/dx_j)+d_ik*(du_k/dx_j)+d_jk*(du_k/dx_i)
 ! (3)
 !
 ! The reason for defining the coefficient
@@ -36,8 +36,13 @@
 ! solid-residual-jacobian integration
 ! procedure
 \*****************************************/
-#include <functional>
+#pragma once
 #include "mfem.hpp"
+#include <functional>
+
+using namespace std;
+using namespace mfem;
+
 
 real_t kDelta(I,J){return ( (I==J)? 1.00:0.00);};
 
@@ -77,25 +82,46 @@ public:
 // The diffusion tensor is given as
 void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &T,const IntegrationPoint &ip){
   if(rho_ij.Size() != dim)  rho_ij.SetSize(dim);
-  DenseMatrix S_ij(dim), gradU(dim)
+  DenseMatrix S_ij(dim), gradU(dim), CInv(dim), Fs(dim);
+  Array<Vector*> f0(dim);
+  Vector gs0, gf0, gn0;
+
+  //Get values at local Ip and calc
+  //active strain
+  #pragma unroll
+  for(int I=0; I<dim; I++) fibreBasis->GetVectorValue(T, ip, *f0[I]);
+  gs0 = gama->GetValue(T, ip);
 
   //Calculate deformation measures
+  #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
+      Fs(I,J) = kDelta(K,J);
+      Fs(I,J) = Fs(I,J) + gs0*(*f0[0])(I)*(*f0[0])(J);
+      if(dim > 1) Fs(I,J) = Fs(I,J) + gf0*(*f0[0])(I)*(*f0[0])(J);
+      if(dim > 2) Fs(I,J) = Fs(I,J) + gn0*(*f0[0])(I)*(*f0[0])(J);
     }
   }
 
+  ParGridFunction *gama;               //Active strain field
+  ParGridFunction *u;                  //Displacement field
+  ParGridFunction *p; 
+
   //Calculate S_ij
+  #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
+
+
     }
   }  
 
   //Calculate rho_ij
+  #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
       for(int K=0; K<dim; K++){
-        rho_ij(I,J) = (S_ij(I,K) + S_ij(K,I))*gradU(K,J) + S_ij(I,K)*kDelta(K,J);
+        rho_ij(I,J) = (S_ij(I,K) + S_ij(K,I))*gradU(K,J) + S_ij(I,K)*kDelta(K,J) + S_ij(J,K)*kDelta(K,I);
       }
     }
   }
