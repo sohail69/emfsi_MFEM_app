@@ -1,5 +1,6 @@
 #pragma once
 #include "mfem.hpp"
+#include "../utilityFuncs.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -26,11 +27,6 @@ void OrthoVec2D(const Vector & A, Vector & B){
 ! Rodrigues' rotation formula 
 !
 \*****************************************/
-// Kronecker delta function
-real_t kDelta(int I, int J){
-  return ((I==J) ? 1.00 : 0.00);
-}
-
 void RodriguesRotMat(const Vector & S0, const real_t & theta, DenseMatrix & R0){
   int DIM = S0.Size();
   DenseMatrix S0x(DIM,DIM);

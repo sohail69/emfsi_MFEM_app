@@ -42,6 +42,7 @@
 #include "include/problemOperators/monodomain.hpp"
 #include "include/Visualisation.hpp"
 #include "include/coefficients/orthoDiffCoeff.hpp"
+#include "include/coefficients/PK2StressCoeff.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -181,6 +182,7 @@ int main(int argc, char *argv[])
 
    Array<ParGridFunction*> fibre(dim);
    ParGridFunction u_gf(&fespace), f_gf(&fespace);
+   ParGridFunction disp_gf(&vecFespace), press_gf(&fespace), gama_gf(&fespace);
 
    // 8. Set the initial conditions for u. All boundaries are considered
    //    natural.
@@ -226,6 +228,17 @@ int main(int argc, char *argv[])
    orthoDiffCoeff D_ij(&fibre, diff,  dim);
    monodomainOper mnOper(fespace, D_ij);
 
+   /*****************************************\
+   !
+   ! Setup the hyperelastic solid mechanics
+   ! problem using 
+   !
+   \*****************************************/
+   NeoHookeanPK2StressCoeff solidStress(&fibre, &disp_gf, &press_gf, &gama_gf, dim);
+/*
+
+disp_gf(&vecFespace), press_gf(&fespace), fibre, gama_gf;
+*/
 
    /*****************************************\
    !

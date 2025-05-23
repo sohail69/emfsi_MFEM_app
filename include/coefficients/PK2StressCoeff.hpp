@@ -39,12 +39,10 @@
 #pragma once
 #include "mfem.hpp"
 #include <functional>
+#include "../utilityFuncs.hpp"
 
 using namespace std;
 using namespace mfem;
-
-
-real_t kDelta(I,J){return ( (I==J)? 1.00:0.00);};
 
 class NeoHookeanPK2StressCoeff : public MatrixCoefficient
 {
@@ -83,45 +81,46 @@ public:
 // The diffusion tensor is given as
 void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &T,const IntegrationPoint &ip){
   if(rho_ij.Size() != dim)  rho_ij.SetSize(dim);
-  DenseMatrix S_ij(dim), gradU(dim), CInv(dim), Fs(dim);
+  real_t gs0, gf0, gn0, press, S_kk, logJ;
+  DenseMatrix S_ij(dim), gradU(dim), CInv(dim), FsInv(dim), F0(dim), Fe(dim), FeT(dim);
   Array<Vector*> f0(dim);
-  real_t gs0, gf0, gn0, press, S_kk;
 
   //Get values at local Ip and calc
   //the active strain
   #pragma unroll
-  for(int I=0; I<dim; I++) fibreBasis->GetVectorValue(T, ip, *f0[I]);
+  for(int I=0; I<dim; I++) (*fibreBasis)[I]->GetVectorValue(T, ip, *f0[I]);
   gf0 = -(gama->GetValue(T, ip));
   gs0 =  4.00*gf0;
   gn0 =  (1.00/((1.00 + gf0)*(1.00 + gn0))) - 1.00;
+  u->GetVectorGradient(T, gradU);
+  press = p->GetValue(T, ip);
 
   //Calculate deformation measures
   #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
-      Fs(I,J) = kDelta(K,J);
-      Fs(I,J) = Fs(I,J) + gs0*(*f0[0])(I)*(*f0[0])(J);
-      if(dim > 1) Fs(I,J) = Fs(I,J) + gf0*(*f0[0])(I)*(*f0[0])(J);
-      if(dim > 2) Fs(I,J) = Fs(I,J) + gn0*(*f0[0])(I)*(*f0[0])(J);
-      CInv(I,J)=0.00;
-      for(int K=0; K<dim; K++){
-        CInv(I,J)=gradU(I,K)*gradU(K,J) + gradU(I,J) + gradU(J,I) + kDelta(I,J);
-      }
+      FsInv(I,J) = kDelta(I,J) + gs0*(*f0[0])(I)*(*f0[0])(J);
+      if(dim > 1) FsInv(I,J) = FsInv(I,J) + gf0*(*f0[1])(I)*(*f0[1])(J);
+      if(dim > 2) FsInv(I,J) = FsInv(I,J) + gn0*(*f0[2])(I)*(*f0[2])(J);
+      F0(I,J)= + gradU(I,J) + kDelta(I,J);
     }
   }
-  u->GetVectorGradient(T, gradU);
-  press = p->GetValue(T, ip);
+  FsInv.Invert();
+  FeT.Transpose(Fe);
+  Mult(F0, FsInv, Fe);
+  Mult(FeT, Fe, CInv);
   CInv.Invert();
+  logJ = log(Fe.Det());
 
   //Calculate S_ij for standard formulation
   S_kk = 0.00;
   #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
-      S_ij(I,J) = mu*(kDelta(I,J) - CInv(I,J));
+      S_ij(I,J) = mu*(kDelta(I,J) - CInv(I,J)) + lmbda*logJ*CInv(I,J);
       S_kk += ((I==J) ? S_ij(I,J) : 0.00);
     }
-  }  
+  }
 
   //Augment S_ij for the mixed formulation
   #pragma unroll
@@ -141,5 +140,3 @@ void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &
     }
   }
 };
-
-
