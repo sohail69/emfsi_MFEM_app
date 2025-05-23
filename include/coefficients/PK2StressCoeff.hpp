@@ -61,8 +61,9 @@ public:
    //Define the Orthotropic diffusion coefficient
    //matrix, using a vector of scalar diff coeffs
    //and an array of vector fibre fields
-   NeoHookeanPK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, const Vector & diff_, const int & dim_)
-      :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), diff_v(diff_)
+   NeoHookeanPK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, ParGridFunction *u_, ParGridFunction *p_
+                          , ParGridFunction *gama_, const int & dim_)
+      :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), u(u_), p(p_), gama(gama_)
   {
     mu    = (4.60/2.20)/(Y/(2.00+2.00*nu));
     lmbda = Y*nu/((1.00+nu)*(1.00-2.00*nu));
@@ -84,13 +85,13 @@ void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &
   if(rho_ij.Size() != dim)  rho_ij.SetSize(dim);
   DenseMatrix S_ij(dim), gradU(dim), CInv(dim), Fs(dim);
   Array<Vector*> f0(dim);
-  Vector gs0, gf0, gn0;
+  real_t gs0, gf0, gn0, press, S_kk;
 
   //Get values at local Ip and calc
   //the active strain
   #pragma unroll
   for(int I=0; I<dim; I++) fibreBasis->GetVectorValue(T, ip, *f0[I]);
-  gf0 = -gama->GetValue(T, ip);
+  gf0 = -(gama->GetValue(T, ip));
   gs0 =  4.00*gf0;
   gn0 =  (1.00/((1.00 + gf0)*(1.00 + gn0))) - 1.00;
 
@@ -102,21 +103,33 @@ void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &
       Fs(I,J) = Fs(I,J) + gs0*(*f0[0])(I)*(*f0[0])(J);
       if(dim > 1) Fs(I,J) = Fs(I,J) + gf0*(*f0[0])(I)*(*f0[0])(J);
       if(dim > 2) Fs(I,J) = Fs(I,J) + gn0*(*f0[0])(I)*(*f0[0])(J);
+      CInv(I,J)=0.00;
+      for(int K=0; K<dim; K++){
+        CInv(I,J)=gradU(I,K)*gradU(K,J) + gradU(I,J) + gradU(J,I) + kDelta(I,J);
+      }
     }
   }
+  u->GetVectorGradient(T, gradU);
+  press = p->GetValue(T, ip);
+  CInv.Invert();
 
-  ParGridFunction *gama;               //Active strain field
-  ParGridFunction *u;                  //Displacement field
-  ParGridFunction *p; 
-
-  //Calculate S_ij
+  //Calculate S_ij for standard formulation
+  S_kk = 0.00;
   #pragma unroll
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
-
-
+      S_ij(I,J) = mu*(kDelta(I,J) - CInv(I,J));
+      S_kk += ((I==J) ? S_ij(I,J) : 0.00);
     }
   }  
+
+  //Augment S_ij for the mixed formulation
+  #pragma unroll
+  for(int I=0; I<dim; I++){
+    for(int J=0; J<dim; J++){
+      S_ij(I,J) = S_ij(I,J) + press*CInv(I,J) - S_kk*kDelta(I,J)/3.00;
+    }
+  }
 
   //Calculate rho_ij
   #pragma unroll
