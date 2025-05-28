@@ -18,20 +18,15 @@ class gradContractionIntegrator : public DeltaLFIntegrator
 {
 private:
    Vector shape, Qvec;
-   MatrixCoefficient &Q;
-   DenseMatrix dshape;
+   MatrixCoefficient &stress;
+   DenseMatrix dshape, rho_ij;
 
 public:
    /// Constructs the domain integrator (Q, grad v)
    VectorDomainLFGradIntegrator(MatrixCoefficient &QF)
-      : DeltaLFIntegrator(QF), Q(QF) { }
+      : DeltaLFIntegrator(QF), Q(QF) {}
 
-   bool SupportsDevice() const override { return true; }
-
-   /// Method defining assembly on device
-   void AssembleDevice(const FiniteElementSpace &fes,
-                       const Array<int> &markers,
-                       Vector &b) override;
+   bool SupportsDevice() const override { return false; }
 
    /** Given a particular Finite Element and a transformation (Tr)
        computes the element right hand side element vector, elvect. */
@@ -39,95 +34,46 @@ public:
                                ElementTransformation &Tr,
                                Vector &elvect) override;
 
-   void AssembleDeltaElementVect(const FiniteElement &fe,
-                                 ElementTransformation &Trans,
-                                 Vector &elvect) override;
-
    using LinearFormIntegrator::AssembleRHSElementVect;
 };
 
 //
 // Assemble the element Vector
 //
-void ElasticityIntegrator::AssembleElementMatrix(
-   const FiniteElement &el, ElementTransformation &Trans, DenseMatrix &elmat)
+void gradContractionIntegrator::AssembleRHSElementVect(const FiniteElement &el
+                                                     , ElementTransformation &Tr
+                                                     , Vector &elvect)
 {
-   int dof = el.GetDof();
-   int dim = el.GetDim();
-   real_t w, L, M;
+  int dof = el.GetDof();
+  int spaceDim = Tr.GetSpaceDim();
+  dshape.SetSize(dof, spaceDim);
 
-   MFEM_ASSERT(dim == Trans.GetSpaceDim(), "");
+  elvect.SetSize(dof);
+  elvect = 0.0;
 
-#ifdef MFEM_THREAD_SAFE
-   DenseMatrix dshape(dof, dim), gshape(dof, dim), pelmat(dof);
-   Vector divshape(dim*dof);
-#else
-   dshape.SetSize(dof, dim);
-   gshape.SetSize(dof, dim);
-   pelmat.SetSize(dof);
-   divshape.SetSize(dim*dof);
-#endif
+  const IntegrationRule *ir = GetIntegrationRule(el, Tr);
+  if (ir == NULL)
+  {
+    int intorder = 2 * el.GetOrder();
+    ir = &IntRules.Get(el.GetGeomType(), intorder);
+  }
 
-   elmat.SetSize(dof * dim);
+  for (int i = 0; i < ir->GetNPoints(); i++)
+  {
+    const IntegrationPoint &ip = ir->IntPoint(i);
+    Tr.SetIntPoint(&ip);
+    el.CalcPhysDShape(Tr, dshape);
+    stress.Eval(rho_ij, Tr, ip);
 
-   const IntegrationRule *ir = GetIntegrationRule(el, Trans);
-   if (ir == NULL)
-   {
-      int order = 2 * Trans.OrderGrad(&el); // correct order?
-      ir = &IntRules.Get(el.GetGeomType(), order);
-   }
-
-   elmat = 0.0;
-
-   for (int i = 0; i < ir->GetNPoints(); i++)
-   {
-      const IntegrationPoint &ip = ir->IntPoint(i);
-
-      el.CalcDShape(ip, dshape);
-
-      Trans.SetIntPoint(&ip);
-      w = ip.weight * Trans.Weight();
-      Mult(dshape, Trans.InverseJacobian(), gshape);
-      MultAAt(gshape, pelmat);
-      gshape.GradToDiv (divshape);
-
-      M = mu->Eval(Trans, ip);
-      if (lambda)
-      {
-         L = lambda->Eval(Trans, ip);
+    for(int I=0; I<dim; I++){
+      for(int J=0; J<dim; J++){
+        elvect += rho_ij(I,J) * dshape() * ip.weight * Tr.Weight();
       }
-      else
-      {
-         L = q_lambda * M;
-         M = q_mu * M;
-      }
-
-      if (L != 0.0)
-      {
-         AddMult_a_VVt(L * w, divshape, elmat);
-      }
-
-      if (M != 0.0)
-      {
-         for (int d = 0; d < dim; d++)
-         {
-            for (int k = 0; k < dof; k++)
-               for (int l = 0; l < dof; l++)
-               {
-                  elmat (dof*d+k, dof*d+l) += (M * w) * pelmat(k, l);
-               }
-         }
-         for (int ii = 0; ii < dim; ii++)
-            for (int jj = 0; jj < dim; jj++)
-            {
-               for (int kk = 0; kk < dof; kk++)
-                  for (int ll = 0; ll < dof; ll++)
-                  {
-                     elmat(dof*ii+kk, dof*jj+ll) +=
-                        (M * w) * gshape(kk, jj) * gshape(ll, ii);
-                  }
-            }
-      }
-   }
+    }
+/*
+    Q.Eval(Qvec, Tr, ip);
+    Qvec *= ip.weight * Tr.Weight();
+    dshape.AddMult(Qvec, elvect);
+*/
+  }
 }
-
