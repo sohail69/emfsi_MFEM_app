@@ -135,7 +135,7 @@ void NeoHookeanPK2StressCoeff::Eval(DenseMatrix &rho_ij, ElementTransformation &
   for(int I=0; I<dim; I++){
     for(int J=0; J<dim; J++){
       for(int K=0; K<dim; K++){
-        rho_ij(I,J) = (S_ij(I,K) + S_ij(K,I))*gradU(K,J) + S_ij(I,K)*kDelta(K,J) + S_ij(J,K)*kDelta(K,I);
+        rho_ij(I,J) = 0.50*( (S_ij(I,K) + S_ij(K,I))*gradU(K,J) + S_ij(I,K)*kDelta(K,J) + S_ij(J,K)*kDelta(K,I));
       }
     }
   }
