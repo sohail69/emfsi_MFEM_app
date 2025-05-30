@@ -8,7 +8,7 @@
 ! case, used for the evaluation of the
 ! following form:
 !
-! rho_ij = (S_ik + S_ki)*(du_k/dx_j)+S_ik*d_kj + S_jk d_ki
+! rho_ij = 0.5*((S_ik + S_ki)*(du_k/dx_j)+S_ik*d_kj + S_jk d_ki)
 ! (1)
 !
 ! This is from the solid mechanics energy
@@ -35,6 +35,10 @@
 ! This significantly simplifies the
 ! solid-residual-jacobian integration
 ! procedure
+!
+! This hard codes the deviatoric PK2 stress
+! for the Neo-Hookean Model
+!
 \*****************************************/
 #pragma once
 #include "mfem.hpp"
