@@ -50,7 +50,7 @@ void gradContractionIntegrator::AssembleRHSElementVect(const FiniteElement &el
   dshape.SetSize(dof, spaceDim);
   dshapedxt.SetSize(dof, spaceDim);
 
-  elvect.SetSize(dof);
+  elvect.SetSize(dof*spaceDim);
   elvect = 0.0;
 
   const IntegrationRule *ir = GetIntegrationRule(el, Tr);
@@ -68,18 +68,13 @@ void gradContractionIntegrator::AssembleRHSElementVect(const FiniteElement &el
     Mult(dshape, Tr.AdjugateJacobian(), dshapedxt);
     stress.Eval(rho_ij, Tr, ip);
 
-    for(int I=0; I<dim; I++){
+    for(int K=0; K<dof; K++){
       for(int J=0; J<dim; J++){
-        for(int K=0; K<dof; K++){
+        for(int I=0; I<dim; I++){
           L = I*dof + K;
           elvect(L) += rho_ij(I,J) * dshape(K,J) * ip.weight * Tr.Weight();
         }
       }
     }
-/*
-    Q.Eval(Qvec, Tr, ip);
-    Qvec *= ip.weight * Tr.Weight();
-    dshape.AddMult(Qvec, elvect);
-*/
   }
 }
