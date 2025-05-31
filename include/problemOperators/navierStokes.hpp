@@ -203,7 +203,7 @@ void navierStokesOper::updateBCVals() const{
 !
 /*****************************************/
 void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
-  //Copy the vector into blockVector
+  //Copy in the current solution
   copyVec(u, xBlock);
 
   //Apply Dirchelet BC values
