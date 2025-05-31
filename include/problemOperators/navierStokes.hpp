@@ -40,10 +40,18 @@ protected:
    CGSolver T_solver;    // Implicit solver for T = M + dt K
    HypreSmoother T_prec; // Preconditioner for the implicit solver
    
+   //
+   // Boundary conditions
+   //
+   Array<int> U_ess_BCTags, P_ess_BCTags;      //Dirch boundary condition tags
    Array<int> U_ess_BCDofs, P_ess_BCDofs;      //Dirch boundary condition dofs
    mutable BlockVector xBlock, rhsBlock;       //auxillary vector
    mutable ParGridFunction *u_gf, *p_gf;       //Coefficient GridFunctions
    mutable ParGridFunction *uBDR_gf, *pBDR_gf; //Dirch boundary condition values
+   Array<VectorCoefficient*> U_ess_BCs;        //Velocity boundary conditions
+   Array<Coefficient*>       P_ess_BCs;        //Pressure boundary conditions
+
+   void updateBCVals();
 public:
    navierStokesOper(ParFiniteElementSpace &f, MatrixCoefficient &D_ij_, real_t &dt);
 
@@ -97,6 +105,37 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace &f)
    T_solver.SetPreconditioner(T_prec);
 };
 
+
+/*****************************************\
+!
+! Update the Dirchelet boundary condition
+! GridFunctions
+!
+/*****************************************/
+void updateBCVals(){
+  if( U_ess_BCTags.Size() != 0){
+    for(int I=0; I<U_ess_BCTags.Size(); I++){
+      if(U_ess_BCTags[I] = 1){
+        Array<int> tmp_BDR_tags( U_ess_BCTags.Size() );
+        tmp_BDR_tags = 0;
+        tmp_BDR_tags[I] = 1;
+        uBDR_gf->ProjectBdrCoefficient(*(U_ess_BCs[I]), tmp_BDR_tags);
+      }
+    }
+  }
+  if( P_ess_BCTags.Size() != 0){
+    for(int I=0; I<P_ess_BCTags.Size(); I++){
+      if(P_ess_BCTags[I] = 1){
+        Array<int> tmp_BDR_tags( P_ess_BCTags.Size() );
+        tmp_BDR_tags = 0;
+        tmp_BDR_tags[I] = 1;
+        pBDR_gf->ProjectBdrCoefficient(*(P_ess_BCs[I]), tmp_BDR_tags);
+      }
+    }
+  }
+};
+
+
 /*****************************************\
 !
 ! Calculates the du/dt entry by computing
@@ -110,7 +149,9 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   copyVec(u, xBlock);
 
   //Apply Dirchelet BC values
-*uBDR_gf, *pBDR_gf; 
+  updateBCVals();
+  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
+  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
 
   //Update the GridFunctions
   u_gf->Distribute(xBlock.GetBlock(0));
@@ -121,8 +162,8 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   pResidual->ParallelAssemble(&rhsBlock.GetBlock(1));
 
   //eliminate Dirchelet BC residuals
-  U_ess_BCDofs, P_ess_BCDofs;
-*uBDR_gf, *pBDR_gf; 
+  rhsBlock.GetBlock(0).SetSubVector(U_ess_BCDofs,0.00);
+  rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
   if(false){
