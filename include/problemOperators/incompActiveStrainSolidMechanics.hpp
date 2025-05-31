@@ -1,6 +1,7 @@
 #pragma once
 #include "mfem.hpp"
-#include "../coefficients/fibreFieldCoeff.hpp"
+#include "../coefficients/PK2StressCoeff.hpp"
+#include "../integrators/gradContractionIntegrator.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -33,24 +34,28 @@ class solidMechanicsIASOper : public Operator
 protected:
    Array<int>    & _ess_bcs_markers;
    Array<double> & _BC_Vals;
-   ParFiniteElementSpace & _fespace;
+   ParFiniteElementSpace *fesU, *fesP;
    ParMixedBilinearForm *K_uu, *K_up, *K_pu, *K_pp;
-   ParBilinearForm *_K_uncon;
-   HypreParMatrix _Kmat, _Kmat_uncon;
+   ParBilinearForm *K_uu_uncon, *K_pp_uncon;
+   HypreParMatrix _Kmat;
 
-   CGSolver _K_solver;    // Krylov solver for inverting the mass matrix K
    HypreSmoother _K_prec; // Preconditioner for the diffusion matrix K
 
    //The Preconditioning objects
    HypreBoomerAMG *invM=NULL;
-   mutable ParGridFunction *z; // auxiliary GFunc used for BC's
+
 
 public:
    //Constructs fibre map operator
-   solidMechanicsIASOper(ParFiniteElementSpace &f, Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
+   solidMechanicsIASOper(ParFiniteElementSpace &f, ParFiniteElementSpace &f
+                       , Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
 
-   //Solves the Poisson equation
-   virtual void Mult(const Vector &x, Vector &y) const;
+   //Calculates and returns the Residual
+   //and recalculates the Jacobian
+   virtual void Mult(const Vector &x, Vector &Residual) const;
+
+   //Returns a handle to the Jacobian
+   mfem::Operator & GetGradient(const mfem::Vector &x) const override;
 
    //Destroys the fibre map operator
    virtual ~solidMechanicsIASOper();

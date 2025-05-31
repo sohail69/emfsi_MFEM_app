@@ -5,6 +5,8 @@
 #include <iostream>
 #include <fstream>
 
+#include "../utilityFuncs.hpp"
+
 using namespace std;
 using namespace mfem;
 
@@ -17,6 +19,13 @@ using namespace mfem;
 class navierStokesOper : public TimeDependentOperator
 {
 protected:
+   ParFiniteElementSpace *fesU, *fesP;
+   ParMixedBilinearForm *K_uu, *K_up, *K_pu, *K_pp;
+   ParBilinearForm *K_uu_uncon, *K_pp_uncon;
+
+   ParLinearForm *uResidual, *pResidual;
+   BlockOperator *Jacobian;
+
    Array<int> empty_tdofs;
    ParFiniteElementSpace &fespace;
    ParBilinearForm *M=NULL, *K=NULL;
@@ -30,8 +39,11 @@ protected:
 
    CGSolver T_solver;    // Implicit solver for T = M + dt K
    HypreSmoother T_prec; // Preconditioner for the implicit solver
-   mutable Vector z; // auxiliary vector
-
+   
+   Array<int> U_ess_BCDofs, P_ess_BCDofs;      //Dirch boundary condition dofs
+   mutable BlockVector xBlock, rhsBlock;       //auxillary vector
+   mutable ParGridFunction *u_gf, *p_gf;       //Coefficient GridFunctions
+   mutable ParGridFunction *uBDR_gf, *pBDR_gf; //Dirch boundary condition values
 public:
    navierStokesOper(ParFiniteElementSpace &f, MatrixCoefficient &D_ij_, real_t &dt);
 
@@ -94,9 +106,30 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace &f)
 !
 /*****************************************/
 void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
-   Kmat.Mult(u, z);
-   z.Neg(); // z = -z
-   M_solver.Mult(z, du_dt);
+  //Copy the vector into blockVector
+  copyVec(u, xBlock);
+
+  //Apply Dirchelet BC values
+*uBDR_gf, *pBDR_gf; 
+
+  //Update the GridFunctions
+  u_gf->Distribute(xBlock.GetBlock(0));
+  p_gf->Distribute(xBlock.GetBlock(1));
+
+  //Reassemble the residuals
+  uResidual->ParallelAssemble(&rhsBlock.GetBlock(0));
+  pResidual->ParallelAssemble(&rhsBlock.GetBlock(1));
+
+  //eliminate Dirchelet BC residuals
+  U_ess_BCDofs, P_ess_BCDofs;
+*uBDR_gf, *pBDR_gf; 
+
+  //Update the Jacobian
+  if(false){
+  }
+
+  //Copy out the residual
+  copyVec(rhsBlock, du_dt);
 };
 
 /*****************************************\
