@@ -19,17 +19,28 @@ using namespace mfem;
 class navierStokesOper : public TimeDependentOperator
 {
 protected:
+   //
+   // Forms, FE-spaces and operators
+   //
+   int dim;
+   Array<int> btoffs;
    ParFiniteElementSpace *fesU, *fesP;
-   ParMixedBilinearForm *K_uu, *K_up, *K_pu, *K_pp;
-   ParBilinearForm *K_uu_uncon, *K_pp_uncon;
+   ParMixedBilinearForm *K_uu=NULL, *K_up=NULL, *K_pu=NULL;
+   ParBilinearForm *K_uu_uncon=NULL;
+   ParLinearForm *uResidual=NULL, *pResidual=NULL;
+   BlockOperator *Jacobian=NULL;
 
-   ParLinearForm *uResidual, *pResidual;
-   BlockOperator *Jacobian;
+   //
+   // Integrator Coefficients
+   //
+   convectiveCoeff *uGradu_c;
+   GradientGridFunctionCoefficient *Gradp_c;
+   VectorGridFunctionCoefficient *u_c;
 
-   Array<int> empty_tdofs;
-   ParFiniteElementSpace &fespace;
-   ParBilinearForm *M=NULL, *K=NULL;
-
+   //
+   // Jacobian and Mass matrix storage
+   //
+   OperatorPtr opUU, opUP, opPU;
    HypreParMatrix Mmat, Kmat;
    HypreParMatrix *T=NULL; // T = M + dt K
    real_t current_dt;
@@ -43,6 +54,7 @@ protected:
    //
    // Boundary conditions
    //
+   Array<int> empty_tdofs;
    Array<int> U_ess_BCTags, P_ess_BCTags;      //Dirch boundary condition tags
    Array<int> U_ess_BCDofs, P_ess_BCDofs;      //Dirch boundary condition dofs
    mutable BlockVector xBlock, rhsBlock;       //auxillary vector
@@ -51,9 +63,10 @@ protected:
    Array<VectorCoefficient*> U_ess_BCs;        //Velocity boundary conditions
    Array<Coefficient*>       P_ess_BCs;        //Pressure boundary conditions
 
-   void updateBCVals();
+   void updateBCVals() const;
+   void buildJacobian() const;
 public:
-   navierStokesOper(ParFiniteElementSpace &f, MatrixCoefficient &D_ij_, real_t &dt);
+   navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, real_t &dt);
 
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
@@ -61,50 +74,95 @@ public:
        This is the only requirement for high-order SDIRK implicit integration.*/
    virtual void ImplicitSolve(const real_t dt, const Vector &u, Vector &k);
 
+   //Returns a handle to the Jacobian
+   mfem::Operator & GetGradient(const mfem::Vector &x) const override;
+
    virtual ~navierStokesOper();
 };
 
 
 /*****************************************\
 !
-! Constructor builds the matrices for the
-! problem class
+! Constructor builds the integrators for
+! the problem class
 !
 /*****************************************/
-navierStokesOper::navierStokesOper(ParFiniteElementSpace &f)
-   : TimeDependentOperator(f.GetTrueVSize(), (real_t) 0.0), fespace(f),
+navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, real_t &dt)
+   : TimeDependentOperator(f_u->GetTrueVSize() + f_p->GetTrueVSize(), (real_t) 0.0), fesU(f_u), fesP(f_p), btoffs(3);
      M(NULL), K(NULL), T(NULL), current_dt(0.0),
      M_solver(f.GetComm()), T_solver(f.GetComm()), z(height)
 {
    const real_t rel_tol = 1e-8;
 
-   M = new ParBilinearForm(&fespace);
-   M->AddDomainIntegrator(new MassIntegrator());
-   M->Assemble(0); // keep sparsity pattern of M and K the same
-   M->FormSystemMatrix(empty_tdofs, Mmat);
+   //Set the Offsets
+   btoffs[0] = 0;
+   btoffs[1] = f_u->GetTrueVSize() ;
+   btoffs[2] = f_p->GetTrueVSize() ;
+   btoffs.PartialSum();
 
-   K = new ParBilinearForm(&fespace);
-   K->AddDomainIntegrator(new DiffusionIntegrator(D_ij));
-   K->Assemble(0); // keep sparsity pattern of M and K the same
-   K->FormSystemMatrix(empty_tdofs, Kmat);
+   //
+   // Setup the gridfunctions
+   //
+   u_gf    = new ParGridFunction(fesU);
+   uBDR_gf = new ParGridFunction(fesU);
+   p_gf    = new ParGridFunction(fesP);
+   pBDR_gf = new ParGridFunction(fesP);
 
-   M_solver.iterative_mode = false;
-   M_solver.SetRelTol(rel_tol);
-   M_solver.SetAbsTol(0.0);
-   M_solver.SetMaxIter(100);
-   M_solver.SetPrintLevel(0);
-   M_prec.SetType(HypreSmoother::Jacobi);
-   M_solver.SetPreconditioner(M_prec);
-   M_solver.SetOperator(Mmat);
+   //
+   // Setup the coefficients
+   //
+   uGradu_c = new convectiveCoeff(dim,u_gf);
+   Gradp_c  = new GradientGridFunctionCoefficient(p_gf);
+   u_c      = new VectorGridFunctionCoefficient(u_gf);
 
-   T_solver.iterative_mode = false;
-   T_solver.SetRelTol(rel_tol);
-   T_solver.SetAbsTol(0.0);
-   T_solver.SetMaxIter(100);
-   T_solver.SetPrintLevel(0);
-   T_solver.SetPreconditioner(T_prec);
+   //
+   // Residual Forms
+   //
+
+   //Momentum equation (du/dt)
+   uResidual = new ParLinearForm(fesU);
+   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator() );      // -div(mu grad(u))  Diffusion
+   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*uGradu_c)); // +u grad(u)        Convection 
+   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*Gradp_c) ); // +grad(p)          Pressure gradient
+
+   //Continuity equation (dp/dt = 0.0)
+   pResidual = new ParLinearForm(fesP);
+   pResidual->AddDomainIntegrator(new DomainLFGradIntegrator(*u_c));        // div(u)            Continuity Error
+
+   //
+   // Jacobian Forms
+   //
+
+   //Velocity Momentum
+   K_uu = new ParMixedBilinearForm(fesU,fesU);
+   K_uu->AddDomainIntegrator(new MassIntegrator());
+
+   //Pressure Momentum
+   K_up = new ParMixedBilinearForm(fesU,fesP);
+   K_up->AddDomainIntegrator(new MassIntegrator());
+
+   //Continuity
+   K_pu = new ParMixedBilinearForm(fesP,fesU);
+   K_pu->AddDomainIntegrator(new MassIntegrator());
 };
 
+/*****************************************\
+!
+! Update the Jacobian block Operator
+!
+!
+/*****************************************/
+void navierStokesOper::buildJacobian() const{
+
+ opUU, opUP, opPU;
+ U_ess_BCDofs, P_ess_BCDofs;
+
+  //Set the block matrix operator
+  Jacobian = new BlockOperator(btoffs);
+  Jacobian->SetBlock(0,0, opUU.Ptr(),  1.0);
+  Jacobian->SetBlock(0,1, opUP.Ptr(), -1.0);
+  Jacobian->SetBlock(1,0, opPU.Ptr(), -1.0);
+};
 
 /*****************************************\
 !
@@ -112,7 +170,7 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace &f)
 ! GridFunctions
 !
 /*****************************************/
-void updateBCVals(){
+void navierStokesOper::updateBCVals() const{
   if( U_ess_BCTags.Size() != 0){
     for(int I=0; I<U_ess_BCTags.Size(); I++){
       if(U_ess_BCTags[I] = 1){
@@ -166,8 +224,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-  if(false){
-  }
+  if(false) buildJacobian();
 
   //Copy out the residual
   copyVec(rhsBlock, du_dt);
@@ -197,6 +254,15 @@ void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k
 
 /*****************************************\
 !
+! Returns the Jacobian matrix
+!
+/*****************************************/
+mfem::Operator & GetGradient(const mfem::Vector &x) const{
+  return *Jacobian;
+};
+
+/*****************************************\
+!
 ! Solve the Backward-Euler equation: 
 ! k = f(u + dt*k, t), for the unknown k.
 ! This is the only requirement for 
@@ -204,7 +270,15 @@ void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k
 !
 /*****************************************/
 navierStokesOper::~navierStokesOper(){
-   delete T;
-   delete M;
-   delete K;
+   delete K_uu, K_up, K_pu;
+   delete uResidual, pResidual;
 };
+
+
+
+
+
+
+
+
+
