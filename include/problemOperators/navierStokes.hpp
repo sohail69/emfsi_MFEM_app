@@ -281,7 +281,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 /*****************************************/
 void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
    if (!T){
-      T = Add(1.0, Mmat, dt, Kmat);
+      T = Add(1.0, Mass, dt, Jacobian);
       current_dt = dt;
       T_solver.SetOperator(*T);
    }
