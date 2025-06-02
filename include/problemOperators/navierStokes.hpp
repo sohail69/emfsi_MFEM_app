@@ -264,7 +264,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-  if(false) reassembleJacobian();
+  reassembleJacobian();
 
   //Copy out the residual
   copyVec(rhsBlock, du_dt);
@@ -282,7 +282,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 /*****************************************/
 void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
    if (!T){
-   //   T = Add(1.0, *Mass, dt, *Jacobian);
+//      T = Add(1.0, dynamic_cast<HypreParMatrix*>(Mass), dt, *dynamic_cast<HypreParMatrix*>(Jacobian));
       current_dt = dt;
       T_solver.SetOperator(*T);
    }
