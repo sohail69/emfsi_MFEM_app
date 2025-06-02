@@ -164,9 +164,10 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    //
    M_uu = new ParMixedBilinearForm(fesU,fesU);
    M_uu->Assemble();
+   M_uu->AddDomainIntegrator(new VectorMassIntegrator(*rho));
    M_uu->FormRectangularSystemOperator(empty_tdofs, U_ess_BCDofs, opMUU);
    Mass  = new BlockOperator(btoffs);
-   Mass->SetBlock(0,0, opMUU.Ptr(),  1.0);
+   Mass->SetBlock(0,0, opMUU, 1.0);
 
    reassembleJacobian();
 };
@@ -263,7 +264,7 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-//  if(false) reassembleJacobian();
+  if(false) reassembleJacobian();
 
   //Copy out the residual
   copyVec(rhsBlock, du_dt);
