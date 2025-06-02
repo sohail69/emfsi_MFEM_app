@@ -38,8 +38,8 @@
 #include <fstream>
 #include <iostream>
 
-#include "include/Visualisation.hpp"
-#include "../include/problemOperators/navierStokes.hpp"
+////#include "include/Visualisation.hpp"
+#include "include/problemOperators/navierStokes.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -179,11 +179,13 @@ int main(int argc, char *argv[])
    \*****************************************/
    // 8. Set the initial conditions for u. All boundaries are considered
    //    natural.
+/*
    FunctionCoefficient u_0(InitialTemperature);
    u_gf.ProjectCoefficient(u_0);
    Vector u, phi;
    u_gf.GetTrueDofs(u);
    u_gf.GetTrueDofs(phi);
+*/
 
    //The BC's
    Array<int>     ess_bcs_markers(pmesh->bdr_attributes.Max());
@@ -223,7 +225,7 @@ int main(int argc, char *argv[])
 
    // 10. Perform time-integration (looping over the time iterations, ti, with a
    //     time-step dt).
-   ode_solver->Init(mnOper);
+   ode_solver->Init(nsOper);
    real_t t = 0.0;
 
    //Time-stepping loop
@@ -231,7 +233,7 @@ int main(int argc, char *argv[])
    for (int ti = 1; !last_step; ti++)
    {
       if (t + dt >= t_final - dt/2) last_step = true;
-      ode_solver->Step(u, t, dt);
+      ode_solver->Step(xBlock, t, dt);
 
       if (last_step || (ti % vis_steps) == 0)
       {

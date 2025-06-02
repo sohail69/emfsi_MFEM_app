@@ -38,8 +38,8 @@ void convectiveCoeff::Eval(Vector &V, ElementTransformation &T, const Integratio
   if(V.Size() != dim) V.SetSize(dim);
   Vector      U(dim);
   DenseMatrix gradU(dim,dim);
-  u->GetVectorValue(T, ip, U);
-  u->GetVectorGradient(T, gradU);
+  vel->GetVectorValue(T, ip, U);
+  vel->GetVectorGradient(T, gradU);
   gradU.Mult(U,V);
 };
 
@@ -74,5 +74,5 @@ public:
 //
 void vectorGradientCoeff::Eval(DenseMatrix &gradU_ij, ElementTransformation &T, const IntegrationPoint &ip){
   if(gradU_ij.Size() != dim) gradU_ij.SetSize(dim);
-  u->GetVectorGradient(T, gradU_ij);
+  vel->GetVectorGradient(T, gradU_ij);
 };

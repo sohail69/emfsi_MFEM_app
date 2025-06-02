@@ -1,6 +1,7 @@
 #pragma once
 #include "mfem.hpp"
 #include <functional>
+#include "../../MFEM_STUFF/mfem-4.7/build/include/mfem/general/forall.hpp"
 
 using namespace std;
 using namespace mfem;
