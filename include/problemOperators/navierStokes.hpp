@@ -70,7 +70,7 @@ protected:
    void updateBCVals() const;
    void reassembleJacobian() const;
 public:
-   navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, real_t &dt);
+   navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt);
 
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
@@ -92,17 +92,20 @@ public:
 ! the problem class
 !
 /*****************************************/
-navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, real_t &dt)
-   : TimeDependentOperator(f_u->GetTrueVSize() + f_p->GetTrueVSize(), (real_t) 0.0), fesU(f_u), fesP(f_p),    
+navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt)
+   : TimeDependentOperator(f_u->GetTrueVSize() + f_p->GetTrueVSize(), (real_t) 0.0), fesU(f_u), fesP(f_p),
      btoffs(3), T(NULL), current_dt(0.0), M_solver(f_u->GetComm()), T_solver(f_u->GetComm())
 {
    const real_t rel_tol = 1e-8;
+   dim = dim_;
 
-   //Set the Offsets
+   //Set the Offsets and block Vectors
    btoffs[0] = 0;
-   btoffs[1] = f_u->GetTrueVSize() ;
-   btoffs[2] = f_p->GetTrueVSize() ;
+   btoffs[1] = f_u->GetTrueVSize();
+   btoffs[2] = f_p->GetTrueVSize();
    btoffs.PartialSum();
+   xBlock.Update(btoffs);
+   rhsBlock.Update(btoffs);
 
    //
    // Setup the gridfunctions
@@ -111,6 +114,10 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    uBDR_gf = new ParGridFunction(fesU);
    p_gf    = new ParGridFunction(fesP);
    pBDR_gf = new ParGridFunction(fesP);
+   *u_gf    = 0.00;
+   *uBDR_gf = 0.00;
+   *p_gf    = 0.00;
+   *pBDR_gf = 0.00;
 
    //
    // Setup the coefficients
@@ -133,9 +140,9 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
 
    //Momentum equation (du/dt)
    uResidual = new ParLinearForm(fesU);
-//   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator() );       // -div(mu grad(u)) v  Diffusion
-   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*uGradu_c)); // +u grad(u) v    Convection 
-   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*Gradp_c) ); // +grad(p) v      Pressure gradient
+//   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator() );       //-div(mu grad(u)) v  Diffusion
+   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*uGradu_c)); //+u grad(u) v        Convection 
+   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*Gradp_c) ); //+grad(p) v          Pressure grad
 
    //Continuity equation (dp/dt = 0.0)
    pResidual = new ParLinearForm(fesP);
@@ -163,13 +170,13 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    // Build the Mass Matrix and forms
    //
    M_uu = new ParMixedBilinearForm(fesU,fesU);
-   M_uu->Assemble();
    M_uu->AddDomainIntegrator(new VectorMassIntegrator(*rho));
+   M_uu->Assemble();
    M_uu->FormRectangularSystemOperator(empty_tdofs, U_ess_BCDofs, opMUU);
    Mass  = new BlockOperator(btoffs);
    Mass->SetBlock(0,0, opMUU, 1.0);
 
-   reassembleJacobian();
+//   reassembleJacobian();
 };
 
 /*****************************************\
@@ -245,9 +252,10 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   copyVec(u, xBlock);
 
   //Apply Dirchelet BC values
-  updateBCVals();
+//  updateBCVals();
   applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
   applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
+
 
   //Update the GridFunctions
   u_gf->Distribute(xBlock.GetBlock(0));
@@ -260,11 +268,11 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   pResidual->ParallelAssemble(rhsBlock.GetBlock(1));
 
   //eliminate Dirchelet BC residuals
-  rhsBlock.GetBlock(0).SetSubVector(U_ess_BCDofs,0.00);
-  rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
+  if(U_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(0).SetSubVector(U_ess_BCDofs,0.00);
+  if(P_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-  reassembleJacobian();
+//  reassembleJacobian();
 
   //Copy out the residual
   copyVec(rhsBlock, du_dt);
@@ -281,15 +289,16 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 !
 /*****************************************/
 void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
+  copyVec(u, xBlock);
    if (!T){
 //      T = Add(1.0, dynamic_cast<HypreParMatrix*>(Mass), dt, *dynamic_cast<HypreParMatrix*>(Jacobian));
-      current_dt = dt;
-      T_solver.SetOperator(*T);
+    //  current_dt = dt;
+   //   T_solver.SetOperator(*T);
    }
-   MFEM_VERIFY(dt == current_dt, ""); // SDIRK methods use the same dt
+  // MFEM_VERIFY(dt == current_dt, ""); // SDIRK methods use the same dt
    Mult(u, xBlock);
    xBlock.Neg();
-   T_solver.Mult(xBlock, k);
+ //  T_solver.Mult(xBlock, k);
 };
 
 

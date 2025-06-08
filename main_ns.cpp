@@ -203,7 +203,7 @@ int main(int argc, char *argv[])
    ! Construct the Navier-Stokes operator
    !
    \*****************************************/
-   navierStokesOper nsOper(&u_fes, &p_fes, dt);
+   navierStokesOper nsOper(&u_fes, &p_fes, dim, dt);
 
 
    /*****************************************\
