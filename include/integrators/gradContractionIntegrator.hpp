@@ -1,6 +1,9 @@
 #pragma once
 #include "mfem.hpp"
 #include <functional>
+#include "../../../MFEM_STUFF/mfem-4.7/build/include/mfem/fem/intrules.hpp"
+#include "../../../MFEM_STUFF/mfem-4.7/build/include/mfem/fem/lininteg.hpp"
+
 
 using namespace std;
 using namespace mfem;
@@ -14,17 +17,18 @@ using namespace mfem;
 ! S_ij dN_im/dx_j
 !
 \*****************************************/
-class gradContractionIntegrator : public DeltaLFIntegrator
+class gradContractionIntegrator : public LinearFormIntegrator
 {
 private:
+   int & dim;
    Vector shape, Qvec;
-   MatrixCoefficient &stress;
-   DenseMatrix dshape, dshapedxt, rho_ij;
+   MatrixCoefficient & stress;
+   DenseMatrix dshape, dshapedxt;
 
 public:
    /// Constructs the domain integrator (Q, grad v)
-   VectorDomainLFGradIntegrator(MatrixCoefficient &QF)
-      : DeltaLFIntegrator(QF), Q(QF) {}
+   gradContractionIntegrator(MatrixCoefficient & QF, int & dim_)
+      : LinearFormIntegrator(), stress(QF), dim(dim_) {}
 
    bool SupportsDevice() const override { return false; }
 
@@ -49,11 +53,13 @@ void gradContractionIntegrator::AssembleRHSElementVect(const FiniteElement &el
   int spaceDim = Tr.GetSpaceDim();
   dshape.SetSize(dof, spaceDim);
   dshapedxt.SetSize(dof, spaceDim);
+  DenseMatrix rho_ij(spaceDim,spaceDim);
 
   elvect.SetSize(dof*spaceDim);
   elvect = 0.0;
 
-  const IntegrationRule *ir = GetIntegrationRule(el, Tr);
+  const IntegrationRule *ir = IntRule;
+  //const IntegrationRule *ir = GetIntegrationRule(el, Tr);
   if (ir == NULL)
   {
     int intorder = 2 * el.GetOrder();
@@ -67,12 +73,11 @@ void gradContractionIntegrator::AssembleRHSElementVect(const FiniteElement &el
     el.CalcPhysDShape(Tr, dshape);
     Mult(dshape, Tr.AdjugateJacobian(), dshapedxt);
     stress.Eval(rho_ij, Tr, ip);
-
     for(int K=0; K<dof; K++){
-      for(int J=0; J<dim; J++){
-        for(int I=0; I<dim; I++){
+      for(int J=0; J<spaceDim; J++){
+        for(int I=0; I<spaceDim; I++){
           L = I*dof + K;
-          elvect(L) += rho_ij(I,J) * dshape(K,J) * ip.weight * Tr.Weight();
+          elvect(L) += rho_ij(I,J) * dshapedxt(K,J) * ip.weight * Tr.Weight();
         }
       }
     }

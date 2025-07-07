@@ -7,6 +7,8 @@
 
 #include "../utilityFuncs.hpp"
 #include "../coefficients/fluidCoeffs.hpp"
+#include "../coefficients/totalFluidCoeff.hpp"
+#include "../integrators/gradContractionIntegrator.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -38,18 +40,19 @@ protected:
    vectorGradientCoeff *Gradu_c;
    GradientGridFunctionCoefficient *Gradp_c;
    VectorGridFunctionCoefficient *u_c;
+   totalFluidCoeff *NSM_coeff;
 
    //
    // Jacobian and Mass matrix storage
    //
-   mutable Operator *opMUU, *opUU, *opUP, *opPU;
+   mutable OperatorPtr opMUU, opUU, opUP, opPU;
    mutable BlockOperator *Jacobian=NULL, *Mass=NULL;
 
    HypreParMatrix Mmat, Kmat;
    HypreParMatrix *T=NULL; // T = M + dt K
    real_t current_dt;
 
-   CGSolver M_solver;    // Krylov solver for inverting the mass matrix M
+   MINRESSolver  M_solver;    // Krylov solver for inverting the mass matrix M
    HypreSmoother M_prec; // Preconditioner for the mass matrix M
 
    CGSolver T_solver;    // Implicit solver for T = M + dt K
@@ -81,8 +84,20 @@ public:
    virtual ~navierStokesOper();
 
    //Set the boundary condition arrays
-   void SetPressureBCs(Array<int> & P_ess_BCTags_, Array<Coefficient*>  & P_ess_BCs_);
-   void SetVelocityBCs(Array<int> & U_ess_BCTags_, Array<VectorCoefficient*> & U_ess_BCs_);
+   void SetPressureBCTags(Array<int> & P_ess_BCTags_);
+   void SetVelocityBCTags(Array<int> & U_ess_BCTags_);
+};
+
+
+/*****************************************\
+!
+! Setup the BC tag arrays
+!
+/*****************************************/
+void navierStokesOper::SetVelocityBCTags(Array<int> & U_ess_BCTags_){
+  U_ess_BCTags.SetSize(U_ess_BCTags_.Size());
+  for(int I=0; I<U_ess_BCTags_.Size(); I++) U_ess_BCTags[I] = U_ess_BCTags_[I];
+  fesU->GetEssentialTrueDofs(U_ess_BCTags, U_ess_BCDofs);
 };
 
 
@@ -122,13 +137,15 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    //
    // Setup the coefficients
    //
-   one      = new ConstantCoefficient(1.0);
-   mu       = new ConstantCoefficient(1.0);
-   rho      = new ConstantCoefficient(1.0);
-   uGradu_c = new convectiveCoeff(dim,u_gf);
-   Gradu_c  = new vectorGradientCoeff(dim,u_gf);
-   Gradp_c  = new GradientGridFunctionCoefficient(p_gf);
-   u_c      = new VectorGridFunctionCoefficient(u_gf);
+   one       = new ConstantCoefficient(1.0);
+   mu        = new ConstantCoefficient(1.0);
+   rho       = new ConstantCoefficient(1.0);
+   uGradu_c  = new convectiveCoeff(dim,u_gf);
+   Gradu_c   = new vectorGradientCoeff(dim,u_gf);
+   Gradp_c   = new GradientGridFunctionCoefficient(p_gf);
+   u_c       = new VectorGridFunctionCoefficient(u_gf);
+   NSM_coeff = new totalFluidCoeff(dim, u_gf, p_gf);
+
 
    // Within the forms u,p represent the pressure
    // and velocity fields while v,h represent the
@@ -140,9 +157,7 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
 
    //Momentum equation (du/dt)
    uResidual = new ParLinearForm(fesU);
-//   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator() );       //-div(mu grad(u)) v  Diffusion
-   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*uGradu_c)); //+u grad(u) v        Convection 
-   uResidual->AddDomainIntegrator(new VectorDomainLFIntegrator(*Gradp_c) ); //+grad(p) v          Pressure grad
+   uResidual->AddDomainIntegrator(new gradContractionIntegrator(*NSM_coeff,dim) ); //-div(uu^T - mu Grad(u) + pI)
 
    //Continuity equation (dp/dt = 0.0)
    pResidual = new ParLinearForm(fesP);
@@ -157,6 +172,8 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    K_uu->AddDomainIntegrator(new VectorDiffusionIntegrator(*mu));  // -div(mu grad(u))  Diffusion
    K_uu->AddDomainIntegrator(new VectorMassIntegrator(*Gradu_c));  // [v, grad(u) v] Convection0
 //   K_uu->AddDomainIntegrator(new VectorMassIntegrator());  // [v, u grad(v)] Convection1
+//*K_uu_uncon=NULL, *M_uu_uncon=NULL;
+
 
    //Pressure Momentum
    K_up = new ParMixedBilinearForm(fesU,fesP);
@@ -172,11 +189,20 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    M_uu = new ParMixedBilinearForm(fesU,fesU);
    M_uu->AddDomainIntegrator(new VectorMassIntegrator(*rho));
    M_uu->Assemble();
-   M_uu->FormRectangularSystemOperator(empty_tdofs, U_ess_BCDofs, opMUU);
+   M_uu->FormRectangularSystemMatrix(empty_tdofs, empty_tdofs, opMUU);
    Mass  = new BlockOperator(btoffs);
-   Mass->SetBlock(0,0, opMUU, 1.0);
+   Mass->SetBlock(0,0, opMUU.Ptr(), 1.0);
+   reassembleJacobian();
 
-//   reassembleJacobian();
+   //
+   // Set the mass solver
+   //
+   unsigned maxIter=200;
+   double atol=1.00e-10, rtol=1.00e-7;
+   M_solver.SetOperator(*Mass);
+   M_solver.SetAbsTol(atol);
+   M_solver.SetRelTol(rtol);
+   M_solver.SetMaxIter(maxIter);
 };
 
 /*****************************************\
@@ -190,23 +216,23 @@ void navierStokesOper::reassembleJacobian() const{
   K_uu->Update();
   K_up->Update();
   K_pu->Update();
-
+/*
   K_uu->Assemble();
   K_up->Assemble();
-  K_pu->Assemble();
-
+  K_pu->Assemble();*/
+/*
   //Form the matrix operators
-  K_uu->FormRectangularSystemOperator(empty_tdofs, U_ess_BCDofs, opUU );
-  K_up->FormRectangularSystemOperator(empty_tdofs, U_ess_BCDofs, opUP );
-  K_pu->FormRectangularSystemOperator(empty_tdofs, P_ess_BCDofs, opPU );
-
+  K_uu->FormRectangularSystemMatrix(empty_tdofs, U_ess_BCDofs, opUU );
+  K_up->FormRectangularSystemMatrix(empty_tdofs, U_ess_BCDofs, opUP );
+  K_pu->FormRectangularSystemMatrix(empty_tdofs, P_ess_BCDofs, opPU );
+*/
   //Set the block matrix operator
-  if(Jacobian != NULL ) delete Jacobian;
+/*  if(Jacobian != NULL ) delete Jacobian;
   Jacobian = NULL;
   Jacobian = new BlockOperator(btoffs);
   Jacobian->SetBlock(0,0, opUU);
   Jacobian->SetBlock(0,1, opUP, -1.0);
-  Jacobian->SetBlock(1,0, opPU, -1.0);
+  Jacobian->SetBlock(1,0, opPU, -1.0);*/
 };
 
 /*****************************************\
@@ -214,7 +240,7 @@ void navierStokesOper::reassembleJacobian() const{
 ! Update the Dirchelet boundary condition
 ! GridFunctions
 !
-/*****************************************/
+\*****************************************/
 void navierStokesOper::updateBCVals() const{
   if( U_ess_BCTags.Size() != 0){
     for(int I=0; I<U_ess_BCTags.Size(); I++){
@@ -253,8 +279,8 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 
   //Apply Dirchelet BC values
 //  updateBCVals();
-  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
-  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
+//  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
+//  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
 
 
   //Update the GridFunctions
@@ -289,16 +315,20 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
 !
 /*****************************************/
 void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
-  copyVec(u, xBlock);
+ // copyVec(u, xBlock);
    if (!T){
 //      T = Add(1.0, dynamic_cast<HypreParMatrix*>(Mass), dt, *dynamic_cast<HypreParMatrix*>(Jacobian));
     //  current_dt = dt;
    //   T_solver.SetOperator(*T);
    }
   // MFEM_VERIFY(dt == current_dt, ""); // SDIRK methods use the same dt
-   Mult(u, xBlock);
-   xBlock.Neg();
+  Mult(u, xBlock);
+  xBlock *= dt;
+  xBlock += u;
+//  M_solver.Mult(xBlock,k);
+//   xBlock.Neg();
  //  T_solver.Mult(xBlock, k);
+  copyVec(xBlock, k);
 };
 
 

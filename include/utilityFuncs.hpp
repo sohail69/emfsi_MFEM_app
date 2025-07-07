@@ -11,6 +11,35 @@ using namespace mfem;
 //
 real_t kDelta(int I, int J){return ( (I==J)? 1.00:0.00);};
 
+
+// Given an ElementTransformation and IntegrationPoint in a refined mesh,
+// return the ElementTransformation of the parent coarse element, and set
+// coarse_ip to the location of the original ip within the coarse element.
+ElementTransformation *RefinedToCoarse(
+   Mesh &coarse_mesh, const ElementTransformation &T,
+   const IntegrationPoint &ip, IntegrationPoint &coarse_ip)
+{
+   const Mesh &fine_mesh = *T.mesh;
+   // Get the element transformation of the coarse element containing the
+   // fine element.
+   int fine_element = T.ElementNo;
+   const CoarseFineTransformations &cf = fine_mesh.GetRefinementTransforms();
+   int coarse_element = cf.embeddings[fine_element].parent;
+   ElementTransformation *coarse_T = coarse_mesh.GetElementTransformation(
+                                        coarse_element);
+   // Transform the integration point from fine element coordinates to coarse
+   // element coordinates.
+   Geometry::Type geom = T.GetGeometryType();
+   IntegrationPointTransformation fine_to_coarse;
+   IsoparametricTransformation &emb_tr = fine_to_coarse.Transf;
+   emb_tr.SetIdentityTransformation(geom);
+   emb_tr.SetPointMat(cf.point_matrices[geom](cf.embeddings[fine_element].matrix));
+   fine_to_coarse.Transform(ip, coarse_ip);
+   coarse_T->SetIntPoint(&coarse_ip);
+   return coarse_T;
+}
+
+
 //
 // Copy one vector to another
 //

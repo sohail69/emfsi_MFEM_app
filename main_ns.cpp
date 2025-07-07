@@ -44,6 +44,16 @@
 using namespace std;
 using namespace mfem;
 
+void topSurface(const Vector & x, Vector & u){
+  unsigned nDim = x.Size();
+  u.SetSize(nDim);
+  u = 0.00;
+  real_t  x1 = 8.00;
+  real_t  x0 = 0.00;
+  real_t  f_norm = 0.25*(x0 - x1)*(x1 - x0);
+  real_t  f = (x(0) - x1)*(x(0) - x0);
+  u(0) = 5.0*f/f_norm;
+}
 
 
 int main(int argc, char *argv[])
@@ -58,9 +68,9 @@ int main(int argc, char *argv[])
    const char *mesh_file = "mesh/beam-quad.mesh";
    int ser_ref_levels = 2;
    int par_ref_levels = 1;
-   int order = 2;
+   int order = 1;
    int ode_solver_type = 3;
-   real_t t_final = 0.5;
+   real_t t_final = 2.5;
    real_t dt = 1.0e-2;
    real_t alpha = 1.0e-2;
    real_t kappa = 0.5;
@@ -153,8 +163,8 @@ int main(int argc, char *argv[])
    delete mesh;
    for (int lev = 0; lev < par_ref_levels; lev++) pmesh->UniformRefinement();
 
-   // 7. Define the vector finite element space representing the current and the
-   //    initial temperature, u_ref.
+   // 7. Define the vector finite element space representing the velocity and the
+   //    pressure.
    Array<int> btoffs(3);
    H1_FECollection fe_coll1(order+1, dim);
    H1_FECollection fe_coll2(order,   dim);
@@ -179,24 +189,25 @@ int main(int argc, char *argv[])
    \*****************************************/
    // 8. Set the initial conditions for u. All boundaries are considered
    //    natural.
-/*
-   FunctionCoefficient u_0(InitialTemperature);
-   u_gf.ProjectCoefficient(u_0);
-   Vector u, phi;
-   u_gf.GetTrueDofs(u);
-   u_gf.GetTrueDofs(phi);
-*/
+   Vector ZeroVecND(dim); ZeroVecND=0.00;
+   VectorFunctionCoefficient TopBC(dim, topSurface);
+   VectorConstantCoefficient OtherBCs(ZeroVecND);
 
-   //The BC's
-   Array<int>     ess_bcs_markers(pmesh->bdr_attributes.Max());
-   Array<double>  BC_Vals(pmesh->bdr_attributes.Max());
-   BC_Vals = 0.00;
-   ess_bcs_markers = 0;
-   BC_Vals[0] =  5.00;
-   ess_bcs_markers[0] = 1;
-   BC_Vals[1] = -5.00;
-   ess_bcs_markers[1] = 1;
+   //Apply the initial conditions (zeroed)
+   u_gf = 0.00;
+   p_gf = 0.00;
 
+   //The BC Tags
+   int nTags = pmesh->bdr_attributes.Max();
+   Array<int> totMarkers(nTags), otMarkers(nTags), tpMarkers(nTags);
+   totMarkers = 1;
+   otMarkers=1;    tpMarkers=0;
+   otMarkers[3]=0; tpMarkers[3]=1;
+
+   //Apply the essential BC's to the 
+   u_gf.ProjectBdrCoefficient(TopBC   , tpMarkers);
+   u_gf.ProjectBdrCoefficient(OtherBCs, otMarkers);
+   xBlock.GetBlock(0) = u_gf;
 
    /*****************************************\
    !
@@ -204,7 +215,7 @@ int main(int argc, char *argv[])
    !
    \*****************************************/
    navierStokesOper nsOper(&u_fes, &p_fes, dim, dt);
-
+   nsOper.SetVelocityBCTags(totMarkers);
 
    /*****************************************\
    !

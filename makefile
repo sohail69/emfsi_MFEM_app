@@ -19,7 +19,9 @@ CONFIG_MK = $(MFEM_INSTALL_DIR)/share/mfem/config.mk
 MFEM_LIB_FILE = mfem_is_not_built
 -include $(CONFIG_MK)
 
-EXECUTABLES = main_p main_ns
+EXECUTABLES = main_ns
+###main_p
+
 
 .PHONY: all clean
 
