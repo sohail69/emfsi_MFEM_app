@@ -19,7 +19,7 @@ using namespace mfem;
 ! equation
 !
 /*****************************************/
-class navierStokesOper : public TimeDependentOperator
+class navierStokesSteadyOper : public Operator
 {
 protected:
    //
@@ -28,8 +28,7 @@ protected:
    int dim;
    Array<int> btoffs;
    ParFiniteElementSpace *fesU, *fesP;
-   ParMixedBilinearForm *M_uu=NULL, *K_uu=NULL, *K_up=NULL, *K_pu=NULL;
-   ParBilinearForm *K_uu_uncon=NULL, *M_uu_uncon=NULL;
+   ParMixedBilinearForm *K_uu=NULL, *K_up=NULL, *K_pu=NULL;
    ParLinearForm *uResidual=NULL, *pResidual=NULL;
 
    //
@@ -45,18 +44,10 @@ protected:
    //
    // Jacobian and Mass matrix storage
    //
-   mutable OperatorPtr opMUU, opUU, opUP, opPU;
-   mutable BlockOperator *Jacobian=NULL, *Mass=NULL;
-
-   HypreParMatrix Mmat, Kmat;
-   HypreParMatrix *T=NULL; // T = M + dt K
-   real_t current_dt;
-
-   MINRESSolver  M_solver;    // Krylov solver for inverting the mass matrix M
-   HypreSmoother M_prec; // Preconditioner for the mass matrix M
-
-   CGSolver T_solver;    // Implicit solver for T = M + dt K
-   HypreSmoother T_prec; // Preconditioner for the implicit solver
+   mutable OperatorPtr opUU, opUP, opPU;
+   mutable BlockOperator *Jacobian=NULL;
+   HypreParMatrix Kmat;
+   real_t current_dt, time;
    
    //
    // Boundary conditions
@@ -70,18 +61,15 @@ protected:
    Array<VectorCoefficient*> U_ess_BCs;        //Velocity boundary conditions
    Array<Coefficient*>       P_ess_BCs;        //Pressure boundary conditions
 
-   void updateBCVals(real_t time) const;
+   void updateBCVals() const;
    void reassembleJacobian() const;
 public:
-   navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt);
+   navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt);
 
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
-   /** Solve the Backward-Euler equation: k = f(u + dt*k, t), for the unknown k.
-       This is the only requirement for high-order SDIRK implicit integration.*/
-   virtual void ImplicitSolve(const real_t dt, const Vector &u, Vector &k);
 
-   virtual ~navierStokesOper();
+   virtual ~navierStokesSteadyOper();
 
    //Set the boundary condition arrays
    void SetPressureBCTags(Array<int> & P_ess_BCTags_);
@@ -94,7 +82,7 @@ public:
 ! Setup the BC tag arrays
 !
 /*****************************************/
-void navierStokesOper::SetVelocityBCTags(Array<int> & U_ess_BCTags_){
+void navierStokesSteadyOper::SetVelocityBCTags(Array<int> & U_ess_BCTags_){
   U_ess_BCTags.SetSize(U_ess_BCTags_.Size());
   for(int I=0; I<U_ess_BCTags_.Size(); I++) U_ess_BCTags[I] = U_ess_BCTags_[I];
   fesU->GetEssentialTrueDofs(U_ess_BCTags, U_ess_BCDofs);
@@ -107,9 +95,9 @@ void navierStokesOper::SetVelocityBCTags(Array<int> & U_ess_BCTags_){
 ! the problem class
 !
 /*****************************************/
-navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt)
-   : TimeDependentOperator(f_u->GetTrueVSize() + f_p->GetTrueVSize(), (real_t) 0.0), fesU(f_u), fesP(f_p),
-     btoffs(3), T(NULL), current_dt(0.0), M_solver(f_u->GetComm()), T_solver(f_u->GetComm())
+navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt)
+   : Operator(f_u->GetTrueVSize() + f_p->GetTrueVSize()), fesU(f_u), fesP(f_p),
+     btoffs(3), current_dt(0.0)
 {
    const real_t rel_tol = 1e-8;
    dim = dim_;
@@ -171,9 +159,7 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    K_uu = new ParMixedBilinearForm(fesU,fesU);
    K_uu->AddDomainIntegrator(new VectorDiffusionIntegrator(*mu));  // -div(mu grad(u))  Diffusion
    K_uu->AddDomainIntegrator(new VectorMassIntegrator(*Gradu_c));  // [v, grad(u) v] Convection0
-//   K_uu->AddDomainIntegrator(new VectorMassIntegrator());  // [v, u grad(v)] Convection1
-//*K_uu_uncon=NULL, *M_uu_uncon=NULL;
-
+// K_uu->AddDomainIntegrator(new VectorMassIntegrator());  // [v, u grad(v)] Convection1
 
    //Pressure Momentum
    K_up = new ParMixedBilinearForm(fesU,fesP);
@@ -183,26 +169,8 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
    K_pu = new ParMixedBilinearForm(fesP,fesU);
    K_pu->AddDomainIntegrator(new VectorDivergenceIntegrator(*one)); // [div(v),h]  Continuity Error
 
-   //
-   // Build the Mass Matrix and forms
-   //
-   M_uu = new ParMixedBilinearForm(fesU,fesU);
-   M_uu->AddDomainIntegrator(new VectorMassIntegrator(*rho));
-   M_uu->Assemble();
-   M_uu->FormRectangularSystemMatrix(empty_tdofs, empty_tdofs, opMUU);
-   Mass  = new BlockOperator(btoffs);
-   Mass->SetBlock(0,0, opMUU.Ptr(), 1.0);
+   //Jacobian
    reassembleJacobian();
-
-   //
-   // Set the mass solver
-   //
-   unsigned maxIter=200;
-   double atol=1.00e-10, rtol=1.00e-7;
-   M_solver.SetOperator(*Mass);
-   M_solver.SetAbsTol(atol);
-   M_solver.SetRelTol(rtol);
-   M_solver.SetMaxIter(maxIter);
 };
 
 /*****************************************\
@@ -211,21 +179,21 @@ navierStokesOper::navierStokesOper(ParFiniteElementSpace *f_u, ParFiniteElementS
 !
 !
 /*****************************************/
-void navierStokesOper::reassembleJacobian() const{
+void navierStokesSteadyOper::reassembleJacobian() const{
   //Update and re-assemble the matrices
   K_uu->Update();
   K_up->Update();
   K_pu->Update();
-/*
+
   K_uu->Assemble();
   K_up->Assemble();
-  K_pu->Assemble();*/
-/*
+  K_pu->Assemble();
+
   //Form the matrix operators
-  K_uu->FormRectangularSystemMatrix(empty_tdofs, U_ess_BCDofs, opUU );
-  K_up->FormRectangularSystemMatrix(empty_tdofs, U_ess_BCDofs, opUP );
-  K_pu->FormRectangularSystemMatrix(empty_tdofs, P_ess_BCDofs, opPU );
-*/
+  K_uu->FormRectangularSystemMatrix(U_ess_BCDofs, U_ess_BCDofs, opUU );
+  K_up->FormRectangularSystemMatrix(P_ess_BCDofs, U_ess_BCDofs, opUP );
+  K_pu->FormRectangularSystemMatrix(U_ess_BCDofs, P_ess_BCDofs, opPU );
+
   //Set the block matrix operator
 /*  if(Jacobian != NULL ) delete Jacobian;
   Jacobian = NULL;
@@ -241,46 +209,27 @@ void navierStokesOper::reassembleJacobian() const{
 ! GridFunctions
 !
 \*****************************************/
-void navierStokesOper::updateBCVals(real_t time) const{
-  if( U_ess_BCTags.Size() != 0){
-    for(int I=0; I<U_ess_BCTags.Size(); I++){
-      if(U_ess_BCTags[I] == 1){
-        Array<int> tmp_BDR_tags( U_ess_BCTags.Size() );
-        tmp_BDR_tags = 0;
-        tmp_BDR_tags[I] = 1;
-        uBDR_gf->ProjectBdrCoefficient(*(U_ess_BCs[I]), tmp_BDR_tags);
-      }
-    }
-  }
-  if( P_ess_BCTags.Size() != 0){
-    for(int I=0; I<P_ess_BCTags.Size(); I++){
-      if(P_ess_BCTags[I] == 1){
-        Array<int> tmp_BDR_tags( P_ess_BCTags.Size() );
-        tmp_BDR_tags = 0;
-        tmp_BDR_tags[I] = 1;
-        pBDR_gf->ProjectBdrCoefficient(*(P_ess_BCs[I]), tmp_BDR_tags);
-      }
-    }
-  }
+void navierStokesSteadyOper::updateBCVals() const{  
+  ApplyDircheletBCs<VectorCoefficient>(U_ess_BCTags, U_ess_BCs, uBDR_gf);
+  ApplyDircheletBCs<Coefficient>(P_ess_BCTags, P_ess_BCs, uBDR_gf);
 };
-
 
 /*****************************************\
 !
 ! Calculates the du/dt entry by computing
 ! M du/dt = K u
 ! then inverts M to give
-! du/dt = Minv K u
+! 0 = Minv K u
 !
 /*****************************************/
-void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
+void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
   //Copy in the current solution
   copyVec(u, xBlock);
 
   //Apply Dirchelet BC values
-//  updateBCVals(time);
-//  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
-//  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
+  updateBCVals();
+  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
+  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
 
   //Update the GridFunctions
   u_gf->Distribute(xBlock.GetBlock(0));
@@ -297,41 +246,12 @@ void navierStokesOper::Mult(const Vector &u, Vector &du_dt) const{
   if(P_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-//  reassembleJacobian();
+  reassembleJacobian();
 
   //Copy out the residual
   copyVec(rhsBlock, du_dt);
 };
 
-/*****************************************\
-!
-! Solve the Backward-Euler equation: 
-! k = f(u + dt*k, t), for the unknown k.
-! This is the only requirement for 
-! high-order SDIRK implicit integration.
-!    Solve the equation:
-!     du_dt = M^{-1}*[-K(u + dt*du_dt)]
-!
-/*****************************************/
-void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k){
- // copyVec(u, xBlock);
-   if (!T){
-//      T = Add(1.0, dynamic_cast<HypreParMatrix*>(Mass), dt, *dynamic_cast<HypreParMatrix*>(Jacobian));
-    //  current_dt = dt;
-   //   T_solver.SetOperator(*T);
-   }
-  // MFEM_VERIFY(dt == current_dt, ""); // SDIRK methods use the same dt
-  Mult(u, xBlock);
-  xBlock *= dt;
-  xBlock += u;
-//  M_solver.Mult(xBlock,k);
-//   xBlock.Neg();
- //  T_solver.Mult(xBlock, k);
-  if(U_ess_BCDofs.Size() != 0) xBlock.GetBlock(0).SetSubVector(U_ess_BCDofs,0.00);
-  if(P_ess_BCDofs.Size() != 0) xBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
-  copyVec(xBlock, k);
-};
-
 
 /*****************************************\
 !
@@ -341,16 +261,7 @@ void navierStokesOper::ImplicitSolve(const real_t dt, const Vector &u, Vector &k
 ! high-order SDIRK implicit integration.
 !
 /*****************************************/
-navierStokesOper::~navierStokesOper(){
+navierStokesSteadyOper::~navierStokesSteadyOper(){
    delete K_uu, K_up, K_pu;
    delete uResidual, pResidual;
 };
-
-
-
-
-
-
-
-
-

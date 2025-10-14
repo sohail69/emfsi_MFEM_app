@@ -1,7 +1,7 @@
 #pragma once
 #include "mfem.hpp"
 #include <functional>
-#include "../../MFEM_STUFF/mfem-4.7/build/include/mfem/general/forall.hpp"
+#include "../../../MFEM_STUFF/mfem-4.7/build/include/mfem/general/forall.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -65,3 +65,24 @@ void applyDirchValues(const mfem::Vector &k, mfem::Vector &y, mfem::Array<int> d
     });
   }
 };
+
+//
+// Apply Dirchelet Boundary conditions
+//
+template<typename TCoeff>
+void ApplyDircheletBCs(const Array<int>     ess_BCTags
+                     , const Array<TCoeff*> ess_BCs
+                     , ParGridFunction      *X)
+{
+  if( ess_BCTags.Size() != 0){
+    for(int I=0; I<ess_BCTags.Size(); I++){
+      if(ess_BCTags[I] == 1){
+        Array<int> tmp_BDR_tags( ess_BCTags.Size() );
+        tmp_BDR_tags = 0;
+        tmp_BDR_tags[I] = 1;
+        X->ProjectBdrCoefficient(*(ess_BCs[I]), tmp_BDR_tags);
+      }
+    }
+  }
+};
+

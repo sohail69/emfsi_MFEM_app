@@ -38,38 +38,29 @@
 #include <fstream>
 #include <iostream>
 
-////#include "include/Visualisation.hpp"
-#include "include/problemOperators/navierStokes.hpp"
-#include "include/problemOperators/navierStokesSteady.hpp"
+#include "include/problemOperators/fibreMapPoisson.hpp"
+#include "include/problemOperators/monodomain.hpp"
+#include "include/Visualisation.hpp"
+#include "include/coefficients/orthoDiffCoeff.hpp"
+#include "include/coefficients/PK2StressCoeff.hpp"
+#include "include/problemOperators/incompActiveStrainSolidMechanics.hpp"
+
 
 using namespace std;
 using namespace mfem;
 
-void topSurface(const Vector & x, Vector & u){
-  unsigned nDim = x.Size();
-  u.SetSize(nDim);
-  u = 0.00;
-  real_t  x1 = 8.00;
-  real_t  x0 = 0.00;
-  real_t  f_norm = 0.25*(x0 - x1)*(x1 - x0);
-  real_t  f = (x(0) - x1)*(x(0) - x0);
-  u(0) = 5.0*f/f_norm;
-}
-
-
-void InletSurface(const Vector & x, Vector & u){
-  unsigned nDim = x.Size();
-  u.SetSize(nDim);
-  u = 0.00;
-  real_t  x1 = 1.00;
-  real_t  x0 = 0.00;
-  real_t  f_norm = 0.25*(x0 - x1)*(x1 - x0);
-  real_t  f = (x(1) - x1)*(x(1) - x0);
-  u(1) = 5.0*f/f_norm;
-}
-
-
-
+real_t InitialTemperature(const Vector &x);
+real_t InitialTemperature(const Vector &x)
+{
+   if (x.Norml2() < 0.5)
+   {
+      return 2.0;
+   }
+   else
+   {
+      return 1.0;
+   }
+};
 
 int main(int argc, char *argv[])
 {
@@ -83,9 +74,9 @@ int main(int argc, char *argv[])
    const char *mesh_file = "mesh/beam-quad.mesh";
    int ser_ref_levels = 2;
    int par_ref_levels = 1;
-   int order = 1;
+   int order = 2;
    int ode_solver_type = 3;
-   real_t t_final = 2.5;
+   real_t t_final = 0.5;
    real_t dt = 1.0e-2;
    real_t alpha = 1.0e-2;
    real_t kappa = 0.5;
@@ -127,12 +118,16 @@ int main(int argc, char *argv[])
                   "--no-adios2-streams",
                   "Save data using adios2 streams.");
    args.Parse();
-   if (!args.Good()){
+   if (!args.Good())
+   {
       args.PrintUsage(cout);
       return 1;
    }
 
-   if (myid == 0) args.PrintOptions(cout);
+   if (myid == 0)
+   {
+      args.PrintOptions(cout);
+   }
 
    // 3. Read the serial mesh from the given mesh file on all processors. We can
    //    handle triangular, quadrilateral, tetrahedral and hexahedral meshes
@@ -140,31 +135,7 @@ int main(int argc, char *argv[])
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
    int dim = mesh->Dimension();
 
-   // 4. Define the ODE solver used for time integration. Several implicit
-   //    singly diagonal implicit Runge-Kutta (SDIRK) methods, as well as
-   //    explicit Runge-Kutta methods are available.
-   ODESolver *ode_solver;
-   switch (ode_solver_type)
-   {
-      // Implicit L-stable methods
-      case 1:  ode_solver = new BackwardEulerSolver; break;
-      case 2:  ode_solver = new SDIRK23Solver(2); break;
-      case 3:  ode_solver = new SDIRK33Solver; break;
-      // Explicit methods
-      case 11: ode_solver = new ForwardEulerSolver; break;
-      case 12: ode_solver = new RK2Solver(0.5); break; // midpoint method
-      case 13: ode_solver = new RK3SSPSolver; break;
-      case 14: ode_solver = new RK4Solver; break;
-      case 15: ode_solver = new GeneralizedAlphaSolver(0.5); break;
-      // Implicit A-stable methods (not L-stable)
-      case 22: ode_solver = new ImplicitMidpointSolver; break;
-      case 23: ode_solver = new SDIRK23Solver; break;
-      case 24: ode_solver = new SDIRK34Solver; break;
-      default:
-         cout << "Unknown ODE solver type: " << ode_solver_type << '\n';
-         delete mesh;
-         return 3;
-   }
+
 
    // 5. Refine the mesh in serial to increase the resolution. In this example
    //    we do 'ser_ref_levels' of uniform refinement, where 'ser_ref_levels' is
@@ -178,106 +149,100 @@ int main(int argc, char *argv[])
    delete mesh;
    for (int lev = 0; lev < par_ref_levels; lev++) pmesh->UniformRefinement();
 
-   // 7. Define the vector finite element space representing the velocity and the
-   //    pressure.
-   Array<int> btoffs(3);
-   H1_FECollection fe_coll1(order+1, dim);
-   H1_FECollection fe_coll2(order,   dim);
-   ParFiniteElementSpace u_fes(pmesh, &fe_coll1,dim);
-   ParFiniteElementSpace p_fes(pmesh, &fe_coll2);
-   btoffs[0] = 0;
-   btoffs[1] = u_fes.GetTrueVSize();
-   btoffs[2] = p_fes.GetTrueVSize();
-   btoffs.PartialSum();
+   // 7. Define the vector finite element space representing the current and the
+   //    initial temperature, u_ref.
+   H1_FECollection fe_coll(order, dim);
+   ParFiniteElementSpace fespace(pmesh, &fe_coll);
+   ParFiniteElementSpace vecFespace(pmesh, &fe_coll,dim);
 
-   HYPRE_BigInt fe_size = u_fes.GlobalTrueVSize() +  p_fes.GlobalTrueVSize();
-   if (myid == 0) cout << "Number of unknowns: " << fe_size << endl;
-   ParGridFunction u_gf(&u_fes), p_gf(&p_fes);
-   BlockVector xBlock(btoffs);
+   HYPRE_BigInt fe_size = fespace.GlobalTrueVSize();
+   if (myid == 0) cout << "Number of temperature unknowns: " << fe_size << endl;
 
+   Array<ParGridFunction*> fibre(dim);
+   ParGridFunction u_gf(&fespace), f_gf(&fespace);
+   ParGridFunction disp_gf(&vecFespace), press_gf(&fespace), gama_gf(&fespace);
 
-   /*****************************************\
-   !
-   ! Construct the boundary and initial
-   ! conditions
-   !
-   \*****************************************/
    // 8. Set the initial conditions for u. All boundaries are considered
    //    natural.
-   Vector ZeroVecND(dim); ZeroVecND=0.00;
-   VectorFunctionCoefficient TopBC(dim, InletSurface);
-   VectorConstantCoefficient OtherBCs(ZeroVecND);
-
-   //Apply the initial conditions (zeroed)
-   u_gf = 0.00;
-   p_gf = 0.00;
-
-   //The BC Tags
-   int nTags = pmesh->bdr_attributes.Max();
-   Array<int> totMarkers(nTags), otMarkers(nTags), tpMarkers(nTags);
-   totMarkers = 1;
-   totMarkers[1] = 0;
-//   otMarkers=1;    tpMarkers=0;
-//   otMarkers[3]=0; tpMarkers[3]=1;
-   otMarkers=1;    tpMarkers=0;
-   otMarkers[0]=0; tpMarkers[0]=1;
-
-
-   //Apply the essential BC's to the 
-   u_gf.ProjectBdrCoefficient(TopBC   , tpMarkers);
-   u_gf.ProjectBdrCoefficient(OtherBCs, otMarkers);
-   xBlock.GetBlock(0) = u_gf;
+   FunctionCoefficient u_0(InitialTemperature);
+   u_gf.ProjectCoefficient(u_0);
+   Vector u, phi;
+   u_gf.GetTrueDofs(u);
+   u_gf.GetTrueDofs(phi);
 
    /*****************************************\
    !
-   ! Construct the Navier-Stokes operator
+   ! Construct the fibre map
    !
    \*****************************************/
-   navierStokesOper nsOper(&u_fes, &p_fes, dim, dt);
-   nsOper.SetVelocityBCTags(totMarkers);
+   //The BC's
+   Array<int>     ess_bcs_markers(pmesh->bdr_attributes.Max());
+   Array<double>  BC_Vals(pmesh->bdr_attributes.Max());
+   BC_Vals = 0.00;
+   ess_bcs_markers = 0;
+   BC_Vals[0] =  5.00;
+   ess_bcs_markers[0] = 1;
+   BC_Vals[1] = -5.00;
+   ess_bcs_markers[1] = 1;
+
+   //Construct the operator
+   //and solve the system
+   fibreMapPoissonOper fpOper(fespace, ess_bcs_markers, BC_Vals);
+   f_gf = u_gf;
+   fpOper.Mult(f_gf,phi);
+
+   //Construct the fibre field
+   for(int I=0; I<dim; I++) fibre[I] = new ParGridFunction(&vecFespace);
+   fpOper.getFibreMapGFuncs2D(phi, fibre);
 
    /*****************************************\
    !
-   ! Run the time-stepping problem
+   ! Construct the PK2 stress coefficient
+   ! and 
    !
    \*****************************************/
-   ParaViewDataCollection paraview_dc("NavierStokes", pmesh);
+   Vector diff(dim); diff = 0.1;
+   orthoDiffCoeff D_ij(&fibre, diff,  dim);
+   monodomainOper mnOper(fespace, D_ij);
+
+   /*****************************************\
+   !
+   ! Setup the hyperelastic solid mechanics
+   ! problem using 
+   !
+   \*****************************************/
+   NeoHookeanPK2StressCoeff solidStress(&fibre, &disp_gf, &press_gf, &gama_gf, dim);
+/*
+
+disp_gf(&vecFespace), press_gf(&fespace), fibre, gama_gf;
+*/
+
+   /*****************************************\
+   !
+   ! Run the Non-linear solid mechanics
+   ! problem
+   !
+   \*****************************************/
+   u_gf.SetFromTrueDofs(u);
+   u_gf.SetFromTrueDofs(phi);
+
+   ParaViewDataCollection paraview_dc("IASM_solids", pmesh);
    paraview_dc.SetPrefixPath("ParaView");
    paraview_dc.SetLevelsOfDetail(order);
    paraview_dc.SetDataFormat(VTKFormat::ASCII);
    paraview_dc.SetHighOrderOutput(true);
    paraview_dc.SetCycle(0);
    paraview_dc.SetTime(0.0);
-   paraview_dc.RegisterField("Velocity",&u_gf);
-   paraview_dc.RegisterField("Pressure",&p_gf);
+   paraview_dc.RegisterField("Potential",&u_gf);
+   paraview_dc.RegisterField("Phi",&f_gf);
+   for(int I=0; I<dim; I++) paraview_dc.RegisterField("f_"+to_string(I),fibre[I]);
    paraview_dc.Save();
 
 
-   // 10. Perform time-integration (looping over the time iterations, ti, with a
-   //     time-step dt).
-   ode_solver->Init(nsOper);
-   real_t t = 0.0;
-
-   //Time-stepping loop
-   bool last_step = false;
-   for (int ti = 1; !last_step; ti++)
-   {
-      if (t + dt >= t_final - dt/2) last_step = true;
-      ode_solver->Step(xBlock, t, dt);
-
-      if (last_step || (ti % vis_steps) == 0)
-      {
-         if (myid == 0) cout << "step " << ti << ", t = " << t << endl;
-         u_gf.SetFromTrueDofs( xBlock.GetBlock(0) );
-         p_gf.SetFromTrueDofs( xBlock.GetBlock(1) );
-         paraview_dc.SetCycle(ti);
-         paraview_dc.SetTime(t);
-         paraview_dc.Save();
-      }
-   }
 
    // 12. Free the used memory.
    delete ode_solver;
    delete pmesh;
+   for(int I=0; I<dim; I++) delete fibre[I];
    return 0;
 }

@@ -34,21 +34,29 @@ class solidMechanicsIASOper : public Operator
 protected:
    Array<int>    & _ess_bcs_markers;
    Array<double> & _BC_Vals;
-   ParFiniteElementSpace *fesU, *fesP;
+   ParFiniteElementSpace& fesU, fesP;
    ParMixedBilinearForm *K_uu, *K_up, *K_pu, *K_pp;
    ParBilinearForm *K_uu_uncon, *K_pp_uncon;
+   ParLinearForm *u_Res, *p_Res;
    HypreParMatrix _Kmat;
-
    HypreSmoother _K_prec; // Preconditioner for the diffusion matrix K
 
    //The Preconditioning objects
    HypreBoomerAMG *invM=NULL;
 
+   //Coefficients
+   NeoHookeanPK2StressCoeff *PK2;
 
+   //Internal gridfunctions used for coefficient
+   //update and boundary conditions
+   mutable ParGridFunction *u_gf, *p_gf, *phi_gf;
 public:
    //Constructs fibre map operator
-   solidMechanicsIASOper(ParFiniteElementSpace &f, ParFiniteElementSpace &f
-                       , Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
+   solidMechanicsIASOper(ParFiniteElementSpace & u_space, ParFiniteElementSpace & p_space
+                        , Array<int> & ess_bcs_markers, Array<double> & BC_Vals);
+
+   //Updates the values of the active strain
+   void UpdatePhi(const Vector &x) const;
 
    //Calculates and returns the Residual
    //and recalculates the Jacobian
@@ -61,3 +69,53 @@ public:
    virtual ~solidMechanicsIASOper();
 
 };
+
+
+
+/*****************************************\
+!
+! Construct the problem Operator
+!
+\*****************************************/
+solidMechanicsIASOper::solidMechanicsIASOper(ParFiniteElementSpace &u_space, ParFiniteElementSpace &p_space
+                                           , Array<int> & ess_bcs_markers, Array<double> & BC_Vals):
+                                           fesU(u_space), fesP(p_space);
+{
+  // Build the reference grid
+  // functions
+  u_gf   = new ParGridFunction;
+  p_gf   = new ParGridFunction;
+  phi_gf = new ParGridFunction;
+
+  // Build the coffeicients
+  // necessary for the Linear
+  // and Bilinear Forms
+  PK2 = new NeoHookeanPK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, ParGridFunction *u_, ParGridFunction *p_
+                                   , ParGridFunction *gama_, const int & dim_)
+
+  // Build the linear/residual 
+  // forms and add integrators
+  u_Res = new ParLinearForm(fesU);
+  u_Res->AddDomainIntegrator(new gradContractionIntegrator(*NSM_coeff,dim) ); //-div(rho_ij . grad(u) )
+
+  p_Res = new ParLinearForm(fesP);
+  p_Res->AddDomainIntegrator(new DomainLFIntegrator() ); //div(p . u)
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
