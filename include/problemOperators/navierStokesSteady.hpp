@@ -15,8 +15,8 @@ using namespace mfem;
 
 /*****************************************\
 !
-! Solves the Incompressible Navier-Stokes
-! equation
+! Solves the Incompressible steady-state 
+! Navier-Stokes equation
 !
 /*****************************************/
 class navierStokesSteadyOper : public Operator
@@ -28,7 +28,8 @@ protected:
    int dim;
    Array<int> btoffs;
    ParFiniteElementSpace *fesU, *fesP;
-   ParMixedBilinearForm *K_uu=NULL, *K_up=NULL, *K_pu=NULL;
+   ParBilinearForm *K_uu=NULL;
+   ParMixedBilinearForm *K_up=NULL, *K_pu=NULL;
    ParLinearForm *uResidual=NULL, *pResidual=NULL;
 
    //
@@ -52,6 +53,7 @@ protected:
    //
    // Boundary conditions
    //
+   bool UfromCoeffs=false, PfromCoeffs=false;
    Array<int> empty_tdofs;
    Array<int> U_ess_BCTags, P_ess_BCTags;      //Dirch boundary condition tags
    Array<int> U_ess_BCDofs, P_ess_BCDofs;      //Dirch boundary condition dofs
@@ -61,19 +63,31 @@ protected:
    Array<VectorCoefficient*> U_ess_BCs;        //Velocity boundary conditions
    Array<Coefficient*>       P_ess_BCs;        //Pressure boundary conditions
 
-   void updateBCVals() const;
    void reassembleJacobian() const;
 public:
+   //Constructor
    navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt);
 
+   //Nonlinear Mult
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
+   //Returns a handle to the Jacobian
+   mfem::Operator & GetGradient(const mfem::Vector &x) const override;
 
+   //Destructor
    virtual ~navierStokesSteadyOper();
 
-   //Set the boundary condition arrays
-   void SetPressureBCTags(Array<int> & P_ess_BCTags_);
-   void SetVelocityBCTags(Array<int> & U_ess_BCTags_);
+   //Set the boundary condition tagging and TDof arrays
+   void SetPressureBCTags(const Array<int> & P_ess_BCTags_);
+   void SetVelocityBCTags(const Array<int> & U_ess_BCTags_);
+
+   //Set the Boundary condition coefficient arrays
+   //or the BC gridfunctions
+   void SetVelocityBCCoeffs(const Array<VectorCoefficient*> & U_ess_BCs_);
+   void SetPressureBCCoeffs(const Array<Coefficient*>       & P_ess_BCs_);
+
+   void SetVelocityBCGfs(const ParGridFunction & uBDR_gf_);
+   void SetPressureBCGfs(const ParGridFunction & pBDR_gf_);
 };
 
 
@@ -82,10 +96,49 @@ public:
 ! Setup the BC tag arrays
 !
 /*****************************************/
-void navierStokesSteadyOper::SetVelocityBCTags(Array<int> & U_ess_BCTags_){
+void navierStokesSteadyOper::SetPressureBCTags(const Array<int> & P_ess_BCTags_){
+  P_ess_BCTags.SetSize(P_ess_BCTags_.Size());
+  for(int I=0; I<P_ess_BCTags_.Size(); I++) P_ess_BCTags[I] = P_ess_BCTags_[I];
+  fesU->GetEssentialTrueDofs(P_ess_BCTags, U_ess_BCDofs);
+};
+
+
+void navierStokesSteadyOper::SetVelocityBCTags(const Array<int> & U_ess_BCTags_){
   U_ess_BCTags.SetSize(U_ess_BCTags_.Size());
   for(int I=0; I<U_ess_BCTags_.Size(); I++) U_ess_BCTags[I] = U_ess_BCTags_[I];
   fesU->GetEssentialTrueDofs(U_ess_BCTags, U_ess_BCDofs);
+};
+
+
+/*****************************************\
+!
+! Set the Boundary condition coefficient
+!     arrays or the BC gridfunctions
+!
+/*****************************************/
+void navierStokesSteadyOper::SetVelocityBCCoeffs(const Array<VectorCoefficient*> & U_ess_BCs_){
+  if(U_ess_BCs.Size() != 0) for(int I=0; I<U_ess_BCs.Size(); I++) U_ess_BCs[I]=NULL;
+  U_ess_BCs.SetSize(U_ess_BCs_.Size());
+  for(int I=0; I<U_ess_BCs_.Size(); I++) U_ess_BCs[I] = U_ess_BCs_[I];
+  UfromCoeffs=true;
+};
+
+
+void navierStokesSteadyOper::SetPressureBCCoeffs(const Array<Coefficient*> & P_ess_BCs_){
+  if(P_ess_BCs.Size() != 0) for(int I=0; I<P_ess_BCs.Size(); I++) P_ess_BCs[I]=NULL;
+  P_ess_BCs.SetSize(P_ess_BCs_.Size());
+  for(int I=0; I<P_ess_BCs_.Size(); I++) P_ess_BCs[I] = P_ess_BCs_[I];
+  PfromCoeffs=true;
+};
+
+
+void navierStokesSteadyOper::SetVelocityBCGfs(const ParGridFunction & uBDR_gf_){
+  *uBDR_gf = uBDR_gf_;
+};
+
+
+void navierStokesSteadyOper::SetPressureBCGfs(const ParGridFunction & pBDR_gf_){
+  *pBDR_gf = pBDR_gf_;
 };
 
 
@@ -139,7 +192,6 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
    // and velocity fields while v,h represent the
    // test functions that correspond to those fields
 
-   //
    // Residual Forms
    //
 
@@ -149,14 +201,13 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
 
    //Continuity equation (dp/dt = 0.0)
    pResidual = new ParLinearForm(fesP);
-   pResidual->AddDomainIntegrator(new DomainLFGradIntegrator(*u_c));        // div(u)          Continuity Error
+   pResidual->AddDomainIntegrator(new DomainLFGradIntegrator(*u_c));               // div(u)
 
-   //
    // Jacobian Forms
    //
 
    //Velocity Momentum
-   K_uu = new ParMixedBilinearForm(fesU,fesU);
+   K_uu = new ParBilinearForm(fesU);
    K_uu->AddDomainIntegrator(new VectorDiffusionIntegrator(*mu));  // -div(mu grad(u))  Diffusion
    K_uu->AddDomainIntegrator(new VectorMassIntegrator(*Gradu_c));  // [v, grad(u) v] Convection0
 // K_uu->AddDomainIntegrator(new VectorMassIntegrator());  // [v, u grad(v)] Convection1
@@ -168,6 +219,10 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
    //Continuity
    K_pu = new ParMixedBilinearForm(fesP,fesU);
    K_pu->AddDomainIntegrator(new VectorDivergenceIntegrator(*one)); // [div(v),h]  Continuity Error
+
+   if(Jacobian != NULL ) delete Jacobian;
+   Jacobian = NULL;
+   Jacobian = new BlockOperator(btoffs);
 
    //Jacobian
    reassembleJacobian();
@@ -190,29 +245,16 @@ void navierStokesSteadyOper::reassembleJacobian() const{
   K_pu->Assemble();
 
   //Form the matrix operators
-  K_uu->FormRectangularSystemMatrix(U_ess_BCDofs, U_ess_BCDofs, opUU );
+  K_uu->FormSystemMatrix(U_ess_BCDofs, opUU);
   K_up->FormRectangularSystemMatrix(P_ess_BCDofs, U_ess_BCDofs, opUP );
   K_pu->FormRectangularSystemMatrix(U_ess_BCDofs, P_ess_BCDofs, opPU );
 
   //Set the block matrix operator
-/*  if(Jacobian != NULL ) delete Jacobian;
-  Jacobian = NULL;
-  Jacobian = new BlockOperator(btoffs);
-  Jacobian->SetBlock(0,0, opUU);
-  Jacobian->SetBlock(0,1, opUP, -1.0);
-  Jacobian->SetBlock(1,0, opPU, -1.0);*/
+  Jacobian->SetBlock(0,0, opUU.Ptr());
+  Jacobian->SetBlock(1,0, opUP.Ptr(), -1.0);
+  Jacobian->SetBlock(0,1, opPU.Ptr(), -1.0);
 };
 
-/*****************************************\
-!
-! Update the Dirchelet boundary condition
-! GridFunctions
-!
-\*****************************************/
-void navierStokesSteadyOper::updateBCVals() const{  
-  ApplyDircheletBCs<VectorCoefficient>(U_ess_BCTags, U_ess_BCs, uBDR_gf);
-  ApplyDircheletBCs<Coefficient>(P_ess_BCTags, P_ess_BCs, uBDR_gf);
-};
 
 /*****************************************\
 !
@@ -227,7 +269,8 @@ void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
   copyVec(u, xBlock);
 
   //Apply Dirchelet BC values
-  updateBCVals();
+  if(UfromCoeffs) ApplyDircheletBCs<VectorCoefficient>(U_ess_BCTags, U_ess_BCs, uBDR_gf);
+  if(PfromCoeffs) ApplyDircheletBCs<Coefficient>(P_ess_BCTags, P_ess_BCs, uBDR_gf);
   applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
   applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
 
@@ -246,10 +289,22 @@ void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
   if(P_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
   //Update the Jacobian
-  reassembleJacobian();
+//  reassembleJacobian();
 
   //Copy out the residual
+  rhsBlock *= -1.00;
   copyVec(rhsBlock, du_dt);
+};
+
+/*****************************************\
+!
+!  Return a reference to the Jacobian
+!              matrix
+!
+/*****************************************/
+mfem::Operator & navierStokesSteadyOper::GetGradient(const mfem::Vector &x) const
+{
+  return *Jacobian;
 };
 
 

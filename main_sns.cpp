@@ -39,7 +39,6 @@
 #include <iostream>
 
 ////#include "include/Visualisation.hpp"
-#include "include/problemOperators/navierStokes.hpp"
 #include "include/problemOperators/navierStokesSteady.hpp"
 
 using namespace std;
@@ -81,7 +80,7 @@ int main(int argc, char *argv[])
 
    // 2. Parse command-line options.
    const char *mesh_file = "mesh/beam-quad.mesh";
-   int ser_ref_levels = 2;
+   int ser_ref_levels = 3;
    int par_ref_levels = 1;
    int order = 1;
    int ode_solver_type = 3;
@@ -140,31 +139,6 @@ int main(int argc, char *argv[])
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
    int dim = mesh->Dimension();
 
-   // 4. Define the ODE solver used for time integration. Several implicit
-   //    singly diagonal implicit Runge-Kutta (SDIRK) methods, as well as
-   //    explicit Runge-Kutta methods are available.
-   ODESolver *ode_solver;
-   switch (ode_solver_type)
-   {
-      // Implicit L-stable methods
-      case 1:  ode_solver = new BackwardEulerSolver; break;
-      case 2:  ode_solver = new SDIRK23Solver(2); break;
-      case 3:  ode_solver = new SDIRK33Solver; break;
-      // Explicit methods
-      case 11: ode_solver = new ForwardEulerSolver; break;
-      case 12: ode_solver = new RK2Solver(0.5); break; // midpoint method
-      case 13: ode_solver = new RK3SSPSolver; break;
-      case 14: ode_solver = new RK4Solver; break;
-      case 15: ode_solver = new GeneralizedAlphaSolver(0.5); break;
-      // Implicit A-stable methods (not L-stable)
-      case 22: ode_solver = new ImplicitMidpointSolver; break;
-      case 23: ode_solver = new SDIRK23Solver; break;
-      case 24: ode_solver = new SDIRK34Solver; break;
-      default:
-         cout << "Unknown ODE solver type: " << ode_solver_type << '\n';
-         delete mesh;
-         return 3;
-   }
 
    // 5. Refine the mesh in serial to increase the resolution. In this example
    //    we do 'ser_ref_levels' of uniform refinement, where 'ser_ref_levels' is
@@ -193,7 +167,7 @@ int main(int argc, char *argv[])
    HYPRE_BigInt fe_size = u_fes.GlobalTrueVSize() +  p_fes.GlobalTrueVSize();
    if (myid == 0) cout << "Number of unknowns: " << fe_size << endl;
    ParGridFunction u_gf(&u_fes), p_gf(&p_fes);
-   BlockVector xBlock(btoffs);
+   BlockVector xBlock(btoffs), zero_Vec(btoffs);
 
 
    /*****************************************\
@@ -230,18 +204,42 @@ int main(int argc, char *argv[])
 
    /*****************************************\
    !
-   ! Construct the Navier-Stokes operator
+   ! Construct the steady-state Navier-Stokes
+   !               operator
    !
    \*****************************************/
-   navierStokesSteadyOper nssOper(&u_fes, &p_fes, dim, dt);
-   navierStokesOper nsOper(&u_fes, &p_fes, dim, dt);
-   nsOper.SetVelocityBCTags(totMarkers);
+   navierStokesSteadyOper snsOper(&u_fes, &p_fes, dim, dt);
+   snsOper.SetVelocityBCTags(totMarkers);
+   snsOper.SetVelocityBCGfs(u_gf);
 
    /*****************************************\
    !
-   ! Run the time-stepping problem
+   ! Run the Non-linear problem
    !
    \*****************************************/
+   MINRESSolver solver(MPI_COMM_WORLD);
+   solver.SetOperator(snsOper.GetGradient(u_gf));
+//   solver.SetPreconditioner(M);
+
+   NewtonSolver newton(MPI_COMM_WORLD);
+   newton.SetOperator(snsOper);
+   newton.SetSolver(solver);
+   newton.SetPrintLevel(1);
+   newton.SetRelTol(1e-10);
+   newton.SetMaxIter(200);
+
+   // 10. Solve the nonlinear system.
+   zero_Vec = 0.0;
+   newton.Mult(zero_Vec, xBlock);
+
+   /*****************************************\
+   !
+   ! Output the data
+   !
+   \*****************************************/
+   u_gf.Distribute(xBlock.GetBlock(0));
+   p_gf.Distribute(xBlock.GetBlock(1));
+
    ParaViewDataCollection paraview_dc("NavierStokes", pmesh);
    paraview_dc.SetPrefixPath("ParaView");
    paraview_dc.SetLevelsOfDetail(order);
@@ -254,31 +252,7 @@ int main(int argc, char *argv[])
    paraview_dc.Save();
 
 
-   // 10. Perform time-integration (looping over the time iterations, ti, with a
-   //     time-step dt).
-   ode_solver->Init(nsOper);
-   real_t t = 0.0;
-
-   //Time-stepping loop
-   bool last_step = false;
-   for (int ti = 1; !last_step; ti++)
-   {
-      if (t + dt >= t_final - dt/2) last_step = true;
-      ode_solver->Step(xBlock, t, dt);
-
-      if (last_step || (ti % vis_steps) == 0)
-      {
-         if (myid == 0) cout << "step " << ti << ", t = " << t << endl;
-         u_gf.SetFromTrueDofs( xBlock.GetBlock(0) );
-         p_gf.SetFromTrueDofs( xBlock.GetBlock(1) );
-         paraview_dc.SetCycle(ti);
-         paraview_dc.SetTime(t);
-         paraview_dc.Save();
-      }
-   }
-
    // 12. Free the used memory.
-   delete ode_solver;
    delete pmesh;
    return 0;
 }

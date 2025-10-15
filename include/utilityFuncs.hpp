@@ -47,6 +47,7 @@ void copyVec(const Vector & x, Vector & y){y = x;};
 
 //
 // Apply Dirchelet Boundary conditions
+// from preset vector
 //
 void applyDirchValues(const mfem::Vector &k, mfem::Vector &y, mfem::Array<int> dofs)
 {
@@ -68,6 +69,7 @@ void applyDirchValues(const mfem::Vector &k, mfem::Vector &y, mfem::Array<int> d
 
 //
 // Apply Dirchelet Boundary conditions
+// from gridfunctions an coefficients
 //
 template<typename TCoeff>
 void ApplyDircheletBCs(const Array<int>     ess_BCTags
