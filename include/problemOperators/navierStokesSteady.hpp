@@ -9,6 +9,7 @@
 #include "../coefficients/fluidCoeffs.hpp"
 #include "../coefficients/totalFluidCoeff.hpp"
 #include "../integrators/gradContractionIntegrator.hpp"
+#include "schurrComplementPrecon.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -35,7 +36,7 @@ protected:
    //
    // Integrator Coefficients
    //
-   ConstantCoefficient *mu, *rho, *one;
+   ConstantCoefficient *mu, *rho, *one, *Mone;
    convectiveCoeff *uGradu_c;
    vectorGradientCoeff *Gradu_c;
    GradientGridFunctionCoefficient *Gradp_c;
@@ -43,13 +44,21 @@ protected:
    totalFluidCoeff *NSM_coeff;
 
    //
-   // Jacobian and Mass matrix storage
+   // Jacobian matrix storage
    //
    mutable OperatorPtr opUU, opUP, opPU;
    mutable BlockOperator *Jacobian=NULL;
-   HypreParMatrix Kmat;
-   real_t current_dt, time;
-   
+   real_t dt, time;
+
+   //
+   // Preconditioning matrix storage
+   //
+   mutable HypreParMatrix *matM=NULL, *matB=NULL, *matC=NULL, *matS = NULL, *matEI=NULL;
+   mutable HypreParVector *Md = NULL;
+   mutable Solver *invM=NULL;
+   mutable HypreBoomerAMG *invS=NULL;
+   mutable BlockDiagonalPreconditioner *nssPrecon = NULL;
+
    //
    // Boundary conditions
    //
@@ -88,6 +97,10 @@ public:
 
    void SetVelocityBCGfs(const ParGridFunction & uBDR_gf_);
    void SetPressureBCGfs(const ParGridFunction & pBDR_gf_);
+
+   //Build the preconditioner
+   void BuildPreconditioner() const;
+   mfem::Solver & GetPrecon() const;
 };
 
 
@@ -150,7 +163,7 @@ void navierStokesSteadyOper::SetPressureBCGfs(const ParGridFunction & pBDR_gf_){
 /*****************************************/
 navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt)
    : Operator(f_u->GetTrueVSize() + f_p->GetTrueVSize()), fesU(f_u), fesP(f_p),
-     btoffs(3), current_dt(0.0)
+     btoffs(3), dt(0.0)
 {
    const real_t rel_tol = 1e-8;
    dim = dim_;
@@ -179,13 +192,15 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
    // Setup the coefficients
    //
    one       = new ConstantCoefficient(1.0);
+   Mone      = new ConstantCoefficient(-1.0);
    mu        = new ConstantCoefficient(1.0);
    rho       = new ConstantCoefficient(1.0);
    uGradu_c  = new convectiveCoeff(dim,u_gf);
-   Gradu_c   = new vectorGradientCoeff(dim,u_gf);
    Gradp_c   = new GradientGridFunctionCoefficient(p_gf);
-   u_c       = new VectorGridFunctionCoefficient(u_gf);
    NSM_coeff = new totalFluidCoeff(dim, u_gf, p_gf);
+
+   u_c       = new VectorGridFunctionCoefficient(u_gf);
+   Gradu_c   = new vectorGradientCoeff(dim,u_gf);
 
 
    // Within the forms u,p represent the pressure
@@ -201,16 +216,16 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
 
    //Continuity equation (dp/dt = 0.0)
    pResidual = new ParLinearForm(fesP);
-   pResidual->AddDomainIntegrator(new DomainLFGradIntegrator(*u_c));               // div(u)
+   pResidual->AddDomainIntegrator(new DomainLFGradIntegrator(*u_c)); // div(u)
 
    // Jacobian Forms
    //
 
    //Velocity Momentum
    K_uu = new ParBilinearForm(fesU);
-   K_uu->AddDomainIntegrator(new VectorDiffusionIntegrator(*mu));  // -div(mu grad(u))  Diffusion
-   K_uu->AddDomainIntegrator(new VectorMassIntegrator(*Gradu_c));  // [v, grad(u) v] Convection0
-// K_uu->AddDomainIntegrator(new VectorMassIntegrator());  // [v, u grad(v)] Convection1
+   K_uu->AddDomainIntegrator(new VectorDiffusionIntegrator(*mu));             // -div(mu grad(u))  Diffusion
+   K_uu->AddDomainIntegrator(new VectorMassIntegrator(*Gradu_c));             // [v, grad(u) v] Convection0
+   K_uu->AddDomainIntegrator(new MixedDirectionalDerivativeIntegrator(*u_c)); // [v, u grad(v)] Convection1
 
    //Pressure Momentum
    K_up = new ParMixedBilinearForm(fesU,fesP);
@@ -218,11 +233,14 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
 
    //Continuity
    K_pu = new ParMixedBilinearForm(fesP,fesU);
-   K_pu->AddDomainIntegrator(new VectorDivergenceIntegrator(*one)); // [div(v),h]  Continuity Error
+   K_pu->AddDomainIntegrator(new VectorDivergenceIntegrator(*Mone)); // [div(v),h]  Continuity Error
 
    if(Jacobian != NULL ) delete Jacobian;
    Jacobian = NULL;
    Jacobian = new BlockOperator(btoffs);
+   if(nssPrecon != NULL ) delete nssPrecon;
+   nssPrecon = NULL;
+   nssPrecon = new BlockDiagonalPreconditioner(btoffs);
 
    //Jacobian
    reassembleJacobian();
@@ -232,27 +250,68 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
 !
 ! Update the Jacobian block Operator
 !
-!
 /*****************************************/
 void navierStokesSteadyOper::reassembleJacobian() const{
   //Update and re-assemble the matrices
   K_uu->Update();
-  K_up->Update();
-  K_pu->Update();
-
   K_uu->Assemble();
+
+  K_up->Update();
   K_up->Assemble();
+
+  K_pu->Update();
   K_pu->Assemble();
 
   //Form the matrix operators
   K_uu->FormSystemMatrix(U_ess_BCDofs, opUU);
-  K_up->FormRectangularSystemMatrix(P_ess_BCDofs, U_ess_BCDofs, opUP );
-  K_pu->FormRectangularSystemMatrix(U_ess_BCDofs, P_ess_BCDofs, opPU );
+  K_up->FormRectangularSystemMatrix(U_ess_BCDofs, P_ess_BCDofs, opUP);
+  K_pu->FormRectangularSystemMatrix(P_ess_BCDofs, U_ess_BCDofs, opPU);
 
   //Set the block matrix operator
   Jacobian->SetBlock(0,0, opUU.Ptr());
   Jacobian->SetBlock(1,0, opUP.Ptr(), -1.0);
   Jacobian->SetBlock(0,1, opPU.Ptr(), -1.0);
+
+  BuildPreconditioner();
+};
+
+
+/*****************************************\
+!
+!       Build the preconditioner
+!
+/*****************************************/
+void navierStokesSteadyOper::BuildPreconditioner() const{
+  if(Md    != NULL) delete Md;
+  if(invM  != NULL) delete invM;
+  if(invS  != NULL) delete invS;
+
+  //Construct the a Schurr Complement
+  //Gauss-Seidel block Preconditioner
+  matM = static_cast<HypreParMatrix*>( opUU.Ptr() );
+  matB = static_cast<HypreParMatrix*>( opUP.Ptr() );
+  matC = static_cast<HypreParMatrix*>( opPU.Ptr() );
+
+  Md = new HypreParVector(MPI_COMM_WORLD, matM->GetGlobalNumRows(),matM->GetRowStarts());
+  matM->GetDiag(*Md);
+//  matC->InvScaleRows(*Md);
+//  invM = new HypreDiagScale(*matM);
+
+  matS = ParMult(matB, matC);
+  invS = new HypreBoomerAMG(*matM);
+//  invS = new HypreBoomerAMG(*matS);
+  invS->SetInterpolation(9);
+  invS->SetRelaxType(12);
+  invS->SetCycleType(2);
+  invS->SetCoarsening(6);
+
+  nssPrecon->SetDiagonalBlock(0,invS);
+//  nssPrecon->SetDiagonalBlock(0,invM);
+//  nssPrecon->SetDiagonalBlock(1,invS);
+};
+
+mfem::Solver & navierStokesSteadyOper::GetPrecon() const{
+  return *nssPrecon;
 };
 
 
@@ -288,9 +347,6 @@ void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
   if(U_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(0).SetSubVector(U_ess_BCDofs,0.00);
   if(P_ess_BCDofs.Size() != 0) rhsBlock.GetBlock(1).SetSubVector(P_ess_BCDofs,0.00);
 
-  //Update the Jacobian
-//  reassembleJacobian();
-
   //Copy out the residual
   rhsBlock *= -1.00;
   copyVec(rhsBlock, du_dt);
@@ -304,6 +360,21 @@ void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
 /*****************************************/
 mfem::Operator & navierStokesSteadyOper::GetGradient(const mfem::Vector &x) const
 {
+  //Copy in the current solution
+  copyVec(x, xBlock);
+
+  //Apply Dirchelet BC values
+  if(UfromCoeffs) ApplyDircheletBCs<VectorCoefficient>(U_ess_BCTags, U_ess_BCs, uBDR_gf);
+  if(PfromCoeffs) ApplyDircheletBCs<Coefficient>(P_ess_BCTags, P_ess_BCs, uBDR_gf);
+  applyDirchValues(*uBDR_gf, xBlock.GetBlock(0), U_ess_BCDofs);
+  applyDirchValues(*pBDR_gf, xBlock.GetBlock(1), P_ess_BCDofs);
+
+  //Update the GridFunctions
+  u_gf->Distribute(xBlock.GetBlock(0));
+  p_gf->Distribute(xBlock.GetBlock(1));
+
+  //Update the Jacobian
+  reassembleJacobian();
   return *Jacobian;
 };
 

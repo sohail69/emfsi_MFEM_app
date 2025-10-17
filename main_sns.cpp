@@ -60,14 +60,14 @@ void InletSurface(const Vector & x, Vector & u){
   unsigned nDim = x.Size();
   u.SetSize(nDim);
   u = 0.00;
-  real_t  x1 = 1.00;
-  real_t  x0 = 0.00;
+  real_t  x1 = 0.95;
+  real_t  x0 = 0.35;
   real_t  f_norm = 0.25*(x0 - x1)*(x1 - x0);
   real_t  f = (x(1) - x1)*(x(1) - x0);
-  u(1) = 5.0*f/f_norm;
+
+  u(1) = 0.00;
+  if( (x(1) < x1)and(x(1) > x0) ) u(1) = 2.0*f/f_norm;
 }
-
-
 
 
 int main(int argc, char *argv[])
@@ -82,16 +82,12 @@ int main(int argc, char *argv[])
    const char *mesh_file = "mesh/beam-quad.mesh";
    int ser_ref_levels = 3;
    int par_ref_levels = 1;
-   int order = 1;
-   int ode_solver_type = 3;
-   real_t t_final = 2.5;
+   int order = 2;
    real_t dt = 1.0e-2;
    real_t alpha = 1.0e-2;
    real_t kappa = 0.5;
    bool visualization = true;
-   bool visit = false;
    int vis_steps = 5;
-   bool adios2 = false;
 
    int precision = 8;
    cout.precision(precision);
@@ -105,11 +101,6 @@ int main(int argc, char *argv[])
                   "Number of times to refine the mesh uniformly in parallel.");
    args.AddOption(&order, "-o", "--order",
                   "Order (degree) of the finite elements.");
-   args.AddOption(&ode_solver_type, "-s", "--ode-solver",
-                  "ODE solver: 1 - Backward Euler, 2 - SDIRK2, 3 - SDIRK3,\n\t"
-                  "\t   11 - Forward Euler, 12 - RK2, 13 - RK3 SSP, 14 - RK4.");
-   args.AddOption(&t_final, "-tf", "--t-final",
-                  "Final time; start time is 0.");
    args.AddOption(&dt, "-dt", "--time-step",
                   "Time step.");
    args.AddOption(&alpha, "-a", "--alpha",
@@ -117,14 +108,6 @@ int main(int argc, char *argv[])
    args.AddOption(&kappa, "-k", "--kappa",
                   "Kappa coefficient offset.");
 
-   args.AddOption(&visit, "-visit", "--visit-datafiles", "-no-visit",
-                  "--no-visit-datafiles",
-                  "Save data files for VisIt (visit.llnl.gov) visualization.");
-   args.AddOption(&vis_steps, "-vs", "--visualization-steps",
-                  "Visualize every n-th timestep.");
-   args.AddOption(&adios2, "-adios2", "--adios2-streams", "-no-adios2",
-                  "--no-adios2-streams",
-                  "Save data using adios2 streams.");
    args.Parse();
    if (!args.Good()){
       args.PrintUsage(cout);
@@ -191,16 +174,16 @@ int main(int argc, char *argv[])
    Array<int> totMarkers(nTags), otMarkers(nTags), tpMarkers(nTags);
    totMarkers = 1;
    totMarkers[1] = 0;
-//   otMarkers=1;    tpMarkers=0;
-//   otMarkers[3]=0; tpMarkers[3]=1;
    otMarkers=1;    tpMarkers=0;
    otMarkers[0]=0; tpMarkers[0]=1;
+   otMarkers[1]=0;
 
-
-   //Apply the essential BC's to the 
+   //Apply the essential BC's to the
+   u_gf.ProjectCoefficient(TopBC);
    u_gf.ProjectBdrCoefficient(TopBC   , tpMarkers);
    u_gf.ProjectBdrCoefficient(OtherBCs, otMarkers);
    xBlock.GetBlock(0) = u_gf;
+   xBlock.GetBlock(1) = p_gf;
 
    /*****************************************\
    !
@@ -214,19 +197,34 @@ int main(int argc, char *argv[])
 
    /*****************************************\
    !
+   ! Preprocess data
+   !
+   \*****************************************/
+   ParaViewDataCollection paraview_dc("NavierStokes", pmesh);
+   paraview_dc.SetPrefixPath("ParaView");
+   paraview_dc.SetLevelsOfDetail(order);
+   paraview_dc.SetDataFormat(VTKFormat::ASCII);
+   paraview_dc.SetHighOrderOutput(true);
+   paraview_dc.SetCycle(0);
+   paraview_dc.SetTime(0.0);
+   paraview_dc.RegisterField("Velocity",&u_gf);
+   paraview_dc.RegisterField("Pressure",&p_gf);
+   paraview_dc.Save();
+
+   /*****************************************\
+   !
    ! Run the Non-linear problem
    !
    \*****************************************/
    MINRESSolver solver(MPI_COMM_WORLD);
-   solver.SetOperator(snsOper.GetGradient(u_gf));
-//   solver.SetPreconditioner(M);
+   solver.SetPreconditioner( snsOper.GetPrecon() );
 
    NewtonSolver newton(MPI_COMM_WORLD);
    newton.SetOperator(snsOper);
    newton.SetSolver(solver);
    newton.SetPrintLevel(1);
    newton.SetRelTol(1e-10);
-   newton.SetMaxIter(200);
+   newton.SetMaxIter(60);
 
    // 10. Solve the nonlinear system.
    zero_Vec = 0.0;
@@ -240,13 +238,8 @@ int main(int argc, char *argv[])
    u_gf.Distribute(xBlock.GetBlock(0));
    p_gf.Distribute(xBlock.GetBlock(1));
 
-   ParaViewDataCollection paraview_dc("NavierStokes", pmesh);
-   paraview_dc.SetPrefixPath("ParaView");
-   paraview_dc.SetLevelsOfDetail(order);
-   paraview_dc.SetDataFormat(VTKFormat::ASCII);
-   paraview_dc.SetHighOrderOutput(true);
-   paraview_dc.SetCycle(0);
-   paraview_dc.SetTime(0.0);
+   paraview_dc.SetCycle(1);
+   paraview_dc.SetTime(1.0);
    paraview_dc.RegisterField("Velocity",&u_gf);
    paraview_dc.RegisterField("Pressure",&p_gf);
    paraview_dc.Save();
