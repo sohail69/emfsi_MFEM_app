@@ -20,14 +20,14 @@ using namespace mfem;
 class gradContractionIntegrator : public LinearFormIntegrator
 {
 private:
-   int & dim;
+   unsigned dim;
    Vector shape, Qvec;
    MatrixCoefficient & stress;
    DenseMatrix dshape, dshapedxt;
 
 public:
    /// Constructs the domain integrator (Q, grad v)
-   gradContractionIntegrator(MatrixCoefficient & QF, int & dim_)
+   gradContractionIntegrator(MatrixCoefficient & QF, unsigned dim_)
       : LinearFormIntegrator(), stress(QF), dim(dim_) {}
 
    bool SupportsDevice() const override { return false; }

@@ -6,7 +6,6 @@
 #include <fstream>
 
 #include "../utilityFuncs.hpp"
-#include "../coefficients/fluidCoeffs.hpp"
 #include "../coefficients/totalFluidCoeff.hpp"
 #include "../integrators/gradContractionIntegrator.hpp"
 #include "schurrComplementPrecon.hpp"
@@ -44,6 +43,13 @@ protected:
    totalFluidCoeff *NSM_coeff;
 
    //
+   //Internal gridfunctions used for coefficient
+   //update and boundary conditions
+   //
+   mutable ParGridFunction *u_gf, *p_gf;       //Coefficient GridFunctions
+   mutable BlockVector xBlock, rhsBlock;       //auxillary vector(s)
+
+   //
    // Jacobian matrix storage
    //
    mutable OperatorPtr opUU, opUP, opPU;
@@ -62,8 +68,6 @@ protected:
    Array<int> empty_tdofs;
    Array<int> U_ess_BCTags, P_ess_BCTags;      //Dirch boundary condition tags
    Array<int> U_ess_BCDofs, P_ess_BCDofs;      //Dirch boundary condition dofs
-   mutable BlockVector xBlock, rhsBlock;       //auxillary vector(s)
-   mutable ParGridFunction *u_gf, *p_gf;       //Coefficient GridFunctions
    mutable ParGridFunction *uBDR_gf, *pBDR_gf; //Dirch boundary condition values
    Array<VectorCoefficient*> U_ess_BCs;        //Velocity boundary conditions
    Array<Coefficient*>       P_ess_BCs;        //Pressure boundary conditions
@@ -360,5 +364,3 @@ void navierStokesSteadyOper::SetVelocityBCGfs(const ParGridFunction & uBDR_gf_){
 void navierStokesSteadyOper::SetPressureBCGfs(const ParGridFunction & pBDR_gf_){
   *pBDR_gf = pBDR_gf_;
 };
-
-

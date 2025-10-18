@@ -56,7 +56,7 @@ private:
   ParGridFunction *gama;               //Active strain field
   ParGridFunction *u;                  //Displacement field
   ParGridFunction *p;                  //Pressure field
-  const int & dim;
+  unsigned dim;
   const real_t Y=1.00, nu=0.499999;
   real_t mu, lmbda;
 public:
@@ -64,7 +64,7 @@ public:
    //matrix, using a vector of scalar diff coeffs
    //and an array of vector fibre fields
    NeoHookeanPK2StressCoeff(Array<ParGridFunction*> *fibreBasis_, ParGridFunction *u_, ParGridFunction *p_
-                          , ParGridFunction *gama_, const int & dim_)
+                          , ParGridFunction *gama_, unsigned dim_)
       :  MatrixCoefficient(dim_), dim(dim_), fibreBasis(fibreBasis_), u(u_), p(p_), gama(gama_)
   {
     mu    = (4.60/2.20)/(Y/(2.00+2.00*nu));
