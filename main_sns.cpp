@@ -40,6 +40,7 @@
 
 ////#include "include/Visualisation.hpp"
 #include "include/problemOperators/navierStokesSteady.hpp"
+#include "include/problemOperators/incompActiveStrainSolidMechanics.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -202,7 +203,7 @@ int main(int argc, char *argv[])
    \*****************************************/
    ParaViewDataCollection paraview_dc("NavierStokes", pmesh);
    paraview_dc.SetPrefixPath("ParaView");
-   paraview_dc.SetLevelsOfDetail(order);
+   paraview_dc.SetLevelsOfDetail(order+1);
    paraview_dc.SetDataFormat(VTKFormat::ASCII);
    paraview_dc.SetHighOrderOutput(true);
    paraview_dc.SetCycle(0);
@@ -216,6 +217,7 @@ int main(int argc, char *argv[])
    ! Run the Non-linear problem
    !
    \*****************************************/
+//   BiCGSTABSolver solver(MPI_COMM_WORLD);
    MINRESSolver solver(MPI_COMM_WORLD);
    solver.SetPreconditioner( snsOper.GetPrecon() );
 
@@ -224,7 +226,7 @@ int main(int argc, char *argv[])
    newton.SetSolver(solver);
    newton.SetPrintLevel(1);
    newton.SetRelTol(1e-10);
-   newton.SetMaxIter(60);
+   newton.SetMaxIter(75);
 
    // 10. Solve the nonlinear system.
    zero_Vec = 0.0;

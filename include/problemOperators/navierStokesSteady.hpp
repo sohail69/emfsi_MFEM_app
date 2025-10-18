@@ -53,11 +53,7 @@ protected:
    //
    // Preconditioning matrix storage
    //
-   mutable HypreParMatrix *matM=NULL, *matB=NULL, *matC=NULL, *matS = NULL, *matEI=NULL;
-   mutable HypreParVector *Md = NULL;
-   mutable Solver *invM=NULL;
-   mutable HypreBoomerAMG *invS=NULL;
-   mutable BlockDiagonalPreconditioner *nssPrecon = NULL;
+   mutable schurrComplementPrecon *scPrecon=NULL;
 
    //
    // Boundary conditions
@@ -77,14 +73,14 @@ public:
    //Constructor
    navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFiniteElementSpace *f_p, int &dim_, real_t &dt);
 
+   //Destructor
+   ~navierStokesSteadyOper();
+
    //Nonlinear Mult
    virtual void Mult(const Vector &u, Vector &du_dt) const;
 
    //Returns a handle to the Jacobian
    mfem::Operator & GetGradient(const mfem::Vector &x) const override;
-
-   //Destructor
-   virtual ~navierStokesSteadyOper();
 
    //Set the boundary condition tagging and TDof arrays
    void SetPressureBCTags(const Array<int> & P_ess_BCTags_);
@@ -98,62 +94,9 @@ public:
    void SetVelocityBCGfs(const ParGridFunction & uBDR_gf_);
    void SetPressureBCGfs(const ParGridFunction & pBDR_gf_);
 
-   //Build the preconditioner
-   void BuildPreconditioner() const;
+   //Get the preconditioner
    mfem::Solver & GetPrecon() const;
 };
-
-
-/*****************************************\
-!
-! Setup the BC tag arrays
-!
-/*****************************************/
-void navierStokesSteadyOper::SetPressureBCTags(const Array<int> & P_ess_BCTags_){
-  P_ess_BCTags.SetSize(P_ess_BCTags_.Size());
-  for(int I=0; I<P_ess_BCTags_.Size(); I++) P_ess_BCTags[I] = P_ess_BCTags_[I];
-  fesU->GetEssentialTrueDofs(P_ess_BCTags, U_ess_BCDofs);
-};
-
-
-void navierStokesSteadyOper::SetVelocityBCTags(const Array<int> & U_ess_BCTags_){
-  U_ess_BCTags.SetSize(U_ess_BCTags_.Size());
-  for(int I=0; I<U_ess_BCTags_.Size(); I++) U_ess_BCTags[I] = U_ess_BCTags_[I];
-  fesU->GetEssentialTrueDofs(U_ess_BCTags, U_ess_BCDofs);
-};
-
-
-/*****************************************\
-!
-! Set the Boundary condition coefficient
-!     arrays or the BC gridfunctions
-!
-/*****************************************/
-void navierStokesSteadyOper::SetVelocityBCCoeffs(const Array<VectorCoefficient*> & U_ess_BCs_){
-  if(U_ess_BCs.Size() != 0) for(int I=0; I<U_ess_BCs.Size(); I++) U_ess_BCs[I]=NULL;
-  U_ess_BCs.SetSize(U_ess_BCs_.Size());
-  for(int I=0; I<U_ess_BCs_.Size(); I++) U_ess_BCs[I] = U_ess_BCs_[I];
-  UfromCoeffs=true;
-};
-
-
-void navierStokesSteadyOper::SetPressureBCCoeffs(const Array<Coefficient*> & P_ess_BCs_){
-  if(P_ess_BCs.Size() != 0) for(int I=0; I<P_ess_BCs.Size(); I++) P_ess_BCs[I]=NULL;
-  P_ess_BCs.SetSize(P_ess_BCs_.Size());
-  for(int I=0; I<P_ess_BCs_.Size(); I++) P_ess_BCs[I] = P_ess_BCs_[I];
-  PfromCoeffs=true;
-};
-
-
-void navierStokesSteadyOper::SetVelocityBCGfs(const ParGridFunction & uBDR_gf_){
-  *uBDR_gf = uBDR_gf_;
-};
-
-
-void navierStokesSteadyOper::SetPressureBCGfs(const ParGridFunction & pBDR_gf_){
-  *pBDR_gf = pBDR_gf_;
-};
-
 
 /*****************************************\
 !
@@ -235,16 +178,34 @@ navierStokesSteadyOper::navierStokesSteadyOper(ParFiniteElementSpace *f_u, ParFi
    K_pu = new ParMixedBilinearForm(fesP,fesU);
    K_pu->AddDomainIntegrator(new VectorDivergenceIntegrator(*Mone)); // [div(v),h]  Continuity Error
 
+   //Build the Jacobian
    if(Jacobian != NULL ) delete Jacobian;
    Jacobian = NULL;
    Jacobian = new BlockOperator(btoffs);
-   if(nssPrecon != NULL ) delete nssPrecon;
-   nssPrecon = NULL;
-   nssPrecon = new BlockDiagonalPreconditioner(btoffs);
-
-   //Jacobian
    reassembleJacobian();
+
+   //build the preconditioner
+   if(scPrecon != NULL ) delete scPrecon;
+   scPrecon = NULL;
+   scPrecon= new schurrComplementPrecon(opUU.Ptr(), opUP.Ptr(), opPU.Ptr());
+   scPrecon->preconRebuild();
 };
+
+
+/*****************************************\
+!
+! Solve the Backward-Euler equation: 
+
+! k = f(u + dt*k, t), for the unknown k.
+! This is the only requirement for 
+! high-order SDIRK implicit integration.
+!
+/*****************************************/
+navierStokesSteadyOper::~navierStokesSteadyOper(){
+   delete K_uu, K_up, K_pu;
+   delete uResidual, pResidual;
+};
+
 
 /*****************************************\
 !
@@ -271,47 +232,17 @@ void navierStokesSteadyOper::reassembleJacobian() const{
   Jacobian->SetBlock(0,0, opUU.Ptr());
   Jacobian->SetBlock(1,0, opUP.Ptr(), -1.0);
   Jacobian->SetBlock(0,1, opPU.Ptr(), -1.0);
-
-  BuildPreconditioner();
 };
 
 
 /*****************************************\
 !
-!       Build the preconditioner
+!       Get the preconditioner
 !
 /*****************************************/
-void navierStokesSteadyOper::BuildPreconditioner() const{
-  if(Md    != NULL) delete Md;
-  if(invM  != NULL) delete invM;
-  if(invS  != NULL) delete invS;
-
-  //Construct the a Schurr Complement
-  //Gauss-Seidel block Preconditioner
-  matM = static_cast<HypreParMatrix*>( opUU.Ptr() );
-  matB = static_cast<HypreParMatrix*>( opUP.Ptr() );
-  matC = static_cast<HypreParMatrix*>( opPU.Ptr() );
-
-  Md = new HypreParVector(MPI_COMM_WORLD, matM->GetGlobalNumRows(),matM->GetRowStarts());
-  matM->GetDiag(*Md);
-//  matC->InvScaleRows(*Md);
-//  invM = new HypreDiagScale(*matM);
-
-  matS = ParMult(matB, matC);
-  invS = new HypreBoomerAMG(*matM);
-//  invS = new HypreBoomerAMG(*matS);
-  invS->SetInterpolation(9);
-  invS->SetRelaxType(12);
-  invS->SetCycleType(2);
-  invS->SetCoarsening(6);
-
-  nssPrecon->SetDiagonalBlock(0,invS);
-//  nssPrecon->SetDiagonalBlock(0,invM);
-//  nssPrecon->SetDiagonalBlock(1,invS);
-};
-
 mfem::Solver & navierStokesSteadyOper::GetPrecon() const{
-  return *nssPrecon;
+  scPrecon->preconRebuild();
+  return *scPrecon;
 };
 
 
@@ -352,6 +283,7 @@ void navierStokesSteadyOper::Mult(const Vector &u, Vector &du_dt) const{
   copyVec(rhsBlock, du_dt);
 };
 
+
 /*****************************************\
 !
 !  Return a reference to the Jacobian
@@ -381,13 +313,52 @@ mfem::Operator & navierStokesSteadyOper::GetGradient(const mfem::Vector &x) cons
 
 /*****************************************\
 !
-! Solve the Backward-Euler equation: 
-! k = f(u + dt*k, t), for the unknown k.
-! This is the only requirement for 
-! high-order SDIRK implicit integration.
+! Setup the BC tag arrays
 !
 /*****************************************/
-navierStokesSteadyOper::~navierStokesSteadyOper(){
-   delete K_uu, K_up, K_pu;
-   delete uResidual, pResidual;
+void navierStokesSteadyOper::SetPressureBCTags(const Array<int> & P_ess_BCTags_){
+  P_ess_BCTags.SetSize(P_ess_BCTags_.Size());
+  for(int I=0; I<P_ess_BCTags_.Size(); I++) P_ess_BCTags[I] = P_ess_BCTags_[I];
+  fesU->GetEssentialTrueDofs(P_ess_BCTags, U_ess_BCDofs);
 };
+
+
+void navierStokesSteadyOper::SetVelocityBCTags(const Array<int> & U_ess_BCTags_){
+  U_ess_BCTags.SetSize(U_ess_BCTags_.Size());
+  for(int I=0; I<U_ess_BCTags_.Size(); I++) U_ess_BCTags[I] = U_ess_BCTags_[I];
+  fesU->GetEssentialTrueDofs(U_ess_BCTags, U_ess_BCDofs);
+};
+
+
+/*****************************************\
+!
+! Set the Boundary condition coefficient
+!     arrays or the BC gridfunctions
+!
+/*****************************************/
+void navierStokesSteadyOper::SetVelocityBCCoeffs(const Array<VectorCoefficient*> & U_ess_BCs_){
+  if(U_ess_BCs.Size() != 0) for(int I=0; I<U_ess_BCs.Size(); I++) U_ess_BCs[I]=NULL;
+  U_ess_BCs.SetSize(U_ess_BCs_.Size());
+  for(int I=0; I<U_ess_BCs_.Size(); I++) U_ess_BCs[I] = U_ess_BCs_[I];
+  UfromCoeffs=true;
+};
+
+
+void navierStokesSteadyOper::SetPressureBCCoeffs(const Array<Coefficient*> & P_ess_BCs_){
+  if(P_ess_BCs.Size() != 0) for(int I=0; I<P_ess_BCs.Size(); I++) P_ess_BCs[I]=NULL;
+  P_ess_BCs.SetSize(P_ess_BCs_.Size());
+  for(int I=0; I<P_ess_BCs_.Size(); I++) P_ess_BCs[I] = P_ess_BCs_[I];
+  PfromCoeffs=true;
+};
+
+
+void navierStokesSteadyOper::SetVelocityBCGfs(const ParGridFunction & uBDR_gf_){
+  *uBDR_gf = uBDR_gf_;
+};
+
+
+void navierStokesSteadyOper::SetPressureBCGfs(const ParGridFunction & pBDR_gf_){
+  *pBDR_gf = pBDR_gf_;
+};
+
+

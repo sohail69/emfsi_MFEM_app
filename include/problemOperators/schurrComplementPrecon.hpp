@@ -33,26 +33,32 @@ class schurrComplementPrecon : public Solver
   private:
     Array<int> btoffs;
     mutable Vector xtmp, rtmp;
-    mutable BlockVector rhsBlock; //auxillary vector(s)
+    mutable BlockVector xBlock, rhsBlock; //auxillary vector(s)
     mutable Operator *OpA=NULL, *OpB=NULL, *OpC=NULL;
 
 
     mutable HypreParVector *Ad = NULL;
-    mutable HypreParMatrix *matA=NULL, *matB=NULL, *matC=NULL;
+    mutable HypreParMatrix *matA=NULL, *matB=NULL, *matC=NULL, *matS=NULL;
 
-    mutable Solver *invS=NULL;
+
+ //   mutable IterativeSolver *invS=NULL;
+    mutable Solver *invS=NULL, *invA2=NULL;
     mutable HypreBoomerAMG *invA=NULL;
     mutable BlockDiagonalPreconditioner *diagPrecon=NULL;
   public:
     //Construct the preconditioner
     schurrComplementPrecon(Operator *OpA_, Operator *OpB_, Operator *OpC_);
 
+   //Rebuild preconditioner
+   void preconRebuild() const;
+
    //Preconditioner Mult
    virtual void Mult(const Vector &x, Vector &y) const;
 
-   //Rebuild preconditioner
-   void preconRebuild() const;
+   //Set the Operator (Not used)
+   virtual void SetOperator(const Operator &op){};
 };
+
 
 /*****************************************\
 !
@@ -60,15 +66,16 @@ class schurrComplementPrecon : public Solver
 !
 /*****************************************/
 schurrComplementPrecon::schurrComplementPrecon(Operator *OpA_, Operator *OpB_, Operator *OpC_):
-     btoffs(3), OpA(OpA_), OpB(OpB_), OpC(OpC_)
-     , Solver(OpA_->Height()+OpC_->Height(), OpA_->Width()+OpB_->Width())
+                     Solver(OpA_->Height()+OpB_->Height(), OpA_->Width()+OpC_->Width()),
+                     btoffs(3), OpA(OpA_), OpB(OpB_), OpC(OpC_)
 {
    //Set the Offsets and auxillary block Vectors
    btoffs[0] = 0;
-   btoffs[1] = OpA_->Width();
-   btoffs[2] = OpB_->Width();
+   btoffs[1] = OpA_->Height();
+   btoffs[2] = OpB_->Height();
    btoffs.PartialSum();
    rhsBlock.Update(btoffs);
+   xBlock.Update(btoffs);
    xtmp.SetSize(OpB_->Height());
    rtmp.SetSize(OpA_->Height());
 
@@ -79,66 +86,55 @@ schurrComplementPrecon::schurrComplementPrecon(Operator *OpA_, Operator *OpB_, O
 
 /*****************************************\
 !
-!        //Rebuild preconditioner
+!         Rebuild preconditioner
 !
 /*****************************************/
 void schurrComplementPrecon::preconRebuild() const
 {
-/*
-
-    Array<int> btoffs;
-    mutable Vector xtmp, rtmp;
-    mutable BlockVector rhsBlock; //auxillary vector(s)
-    mutable Operator *OpA=NULL, *OpB=NULL, *OpC=NULL;
-
-
-    mutable HypreParVector *Ad = NULL;
-    mutable HypreParMatrix *matA=NULL, *matB=NULL, *matC=NULL;
-
-    mutable Solver *invS=NULL;
-    mutable HypreBoomerAMG *invA=NULL;
-    mutable BlockDiagonalPreconditioner *diagPrecon=NULL;
-
-  if(Md    != NULL) delete Md;
-  if(invM  != NULL) delete invM;
+  if(Ad    != NULL) delete Ad;
+  if(invA  != NULL) delete invA;
   if(invS  != NULL) delete invS;
 
   //Construct the a Schurr Complement
   //Gauss-Seidel block Preconditioner
-  matM = static_cast<HypreParMatrix*>( opUU.Ptr() );
-  matB = static_cast<HypreParMatrix*>( opUP.Ptr() );
-  matC = static_cast<HypreParMatrix*>( opPU.Ptr() );
+  matA = static_cast<HypreParMatrix*>( OpA );
+  matB = static_cast<HypreParMatrix*>( OpB );
+  matC = static_cast<HypreParMatrix*>( OpC );
 
-  Md = new HypreParVector(MPI_COMM_WORLD, matM->GetGlobalNumRows(),matM->GetRowStarts());
-  matM->GetDiag(*Md);
-//  matC->InvScaleRows(*Md);
-//  invM = new HypreDiagScale(*matM);
+  invA2 = new HypreDiagScale(*matA);
+  invA  = new HypreBoomerAMG(*matA);
+  invA->SetInterpolation(9);
+  invA->SetRelaxType(12);
+  invA->SetCycleType(2);
+  invA->SetCoarsening(6);
 
+  Ad = new HypreParVector(MPI_COMM_WORLD, matA->GetGlobalNumRows(),matA->GetRowStarts());
+  matA->GetDiag(*Ad);
+  matC->InvScaleRows(*Ad);
   matS = ParMult(matB, matC);
-  invS = new HypreBoomerAMG(*matM);
-//  invS = new HypreBoomerAMG(*matS);
-  invS->SetInterpolation(9);
-  invS->SetRelaxType(12);
-  invS->SetCycleType(2);
-  invS->SetCoarsening(6);
+  invS = new SLISolver(MPI_COMM_WORLD);
+  invS->SetOperator(*matS);
 
-  nssPrecon->SetDiagonalBlock(0,invS);
-//  nssPrecon->SetDiagonalBlock(0,invM);
-//  nssPrecon->SetDiagonalBlock(1,invS);*/
+  diagPrecon->SetDiagonalBlock(0,invA);
+  diagPrecon->SetDiagonalBlock(1,invS);
 };
-
-
 
 /*****************************************\
 !
-!   //Preconditioner Mult
+!        Preconditioner Mult
 !
 /*****************************************/
 void schurrComplementPrecon::Mult(const Vector &x, Vector &y) const
 {
+  copyVec(x, xBlock);
   diagPrecon->Mult(x,rhsBlock);
-  OpB->Mult(rhsBlock.GetBlock(0),xtmp);
+  OpB->Mult(rhsBlock.GetBlock(1),xtmp);
   invA->Mult(xtmp,rtmp);
   rhsBlock.GetBlock(0) -= rtmp;
+//  rhsBlock.GetBlock(1) = 0.00;
+  real_t eps = 1.1;
+  real_t dotProd = InnerProduct(Ad,Ad);
+  rhsBlock.GetBlock(1) = xBlock.GetBlock(1);
+  rhsBlock.GetBlock(1) *= (1.0/(dotProd+eps));
   copyVec(rhsBlock, y);
 };
